@@ -1,17 +1,27 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useAppStore } from '../store';
-import type { AnyNode, GroupNode, TaskNode, TaskStatus } from '../types';
+import type { AnyNode, GroupNode, TaskNode, TaskStatus, PersonNode, PersonRole } from '../types';
+import { getLogger } from '../logger';
 
 export const InspectorPanel: React.FC = () => {
   const selection = useAppStore((s) => s.selection);
   const getNode = useAppStore((s) => s.getNode);
   const updateNode = useAppStore((s) => s.updateNode);
   const enterGroup = useAppStore((s) => s.enterGroup);
+  const log = getLogger('Inspector');
 
   const node = useMemo<AnyNode | undefined>(() => {
     if (selection.length !== 1) return undefined;
     return getNode(selection[0]);
   }, [selection, getNode]);
+
+  useEffect(() => {
+    if (!node) {
+      log.debug('selection:none');
+    } else {
+      log.debug('selection:node', { id: node.id, type: node.type });
+    }
+  }, [node, log]);
 
   if (!node) {
     return (
@@ -53,7 +63,10 @@ export const InspectorPanel: React.FC = () => {
         </label>
         <label>
           Срочность
-          <select value={t.priority || 'med'} onChange={(e) => updateNode(t.id, { priority: e.target.value as any })}>
+          <select
+            value={t.priority || 'med'}
+            onChange={(e) => updateNode(t.id, { priority: (e.target.value as 'low' | 'med' | 'high') })}
+          >
             <option value="low">Низкая</option>
             <option value="med">Средняя</option>
             <option value="high">Высокая</option>
@@ -89,6 +102,42 @@ export const InspectorPanel: React.FC = () => {
     );
   }
 
+  if (node.type === 'person') {
+    const p = node as PersonNode;
+    return (
+      <div className="inspector">
+        <div className="inspector__title">Человек</div>
+        <label>
+          Имя
+          <input value={p.name} onChange={(e) => updateNode(p.id, { name: e.target.value })} />
+        </label>
+        <label>
+          Роль
+          <select value={p.role} onChange={(e) => updateNode(p.id, { role: (e.target.value as PersonRole) })}>
+            <option value="employee">Сотрудник</option>
+            <option value="partner">Партнёр</option>
+            <option value="bot">Бот</option>
+          </select>
+        </label>
+        <label>
+          Иконка (emoji)
+          <input value={p.avatarEmoji || ''} onChange={(e) => updateNode(p.id, { avatarEmoji: e.target.value })} placeholder="👤/🤝/🤖" />
+        </label>
+        <label>
+          Цвет
+          <input type="color" value={p.color || '#B3E5FC'} onChange={(e) => updateNode(p.id, { color: e.target.value })} />
+        </label>
+        <label>
+          Размер (px)
+          <input type="number" min={80} max={400} value={p.width} onChange={(e) => {
+            const size = Math.max(80, Math.min(400, Number(e.target.value)));
+            updateNode(p.id, { width: size, height: size });
+          }} />
+        </label>
+      </div>
+    );
+  }
+
   const g = node as GroupNode;
   return (
     <div className="inspector">
@@ -108,7 +157,7 @@ export const InspectorPanel: React.FC = () => {
           updateNode(g.id, { width: size, height: size });
         }} />
       </label>
-      <button onClick={() => enterGroup(g.id)}>Открыть группу</button>
+      <button onClick={() => { log.info('group:open-click', { id: g.id }); enterGroup(g.id); }} title="Открыть группу" aria-label="Открыть группу">Открыть группу</button>
     </div>
   );
 };

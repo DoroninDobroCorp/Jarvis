@@ -55,7 +55,12 @@
     append('Error: ' + (e.error?.stack || e.message));
   });
   window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
-    const r: any = e.reason;
-    append('UnhandledRejection: ' + (r?.stack || String(r)));
+    const r: unknown = e.reason;
+    type WithStack = { stack?: unknown };
+    const hasStack = (obj: unknown): obj is WithStack => {
+      return typeof obj === 'object' && obj !== null && 'stack' in (obj as Record<string, unknown>);
+    };
+    const msg = hasStack(r) && typeof r.stack === 'string' ? r.stack : String(r);
+    append('UnhandledRejection: ' + msg);
   });
 })();
