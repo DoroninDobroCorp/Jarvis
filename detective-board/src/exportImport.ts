@@ -57,7 +57,7 @@ export async function exportBackup(): Promise<void> {
 export async function importBackup(file: File, mode: 'replace' | 'merge' = 'replace'): Promise<void> {
   const text = await file.text();
   let json: unknown;
-  try { json = JSON.parse(text); } catch (e) { throw new Error('Некорректный JSON'); }
+  try { json = JSON.parse(text); } catch { throw new Error('Некорректный JSON'); }
   const data = json as Partial<BackupData>;
   if (!data || data.version !== 1 || !Array.isArray(data.nodes) || !Array.isArray(data.links)) {
     throw new Error('Неподдерживаемый формат бэкапа');

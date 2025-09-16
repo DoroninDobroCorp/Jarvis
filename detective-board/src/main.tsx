@@ -44,7 +44,7 @@ try {
         // If page is still controlled by any SW, force a one-time reload to detach
         if (navigator.serviceWorker.controller && !reloaded) {
           log.warn('sw:cleanup:reload-once');
-          try { sessionStorage.setItem('SW_RELOAD_ONCE', '1'); } catch {}
+          try { sessionStorage.setItem('SW_RELOAD_ONCE', '1'); } catch (e) { void e; }
           setTimeout(() => { try { location.reload(); } catch { /* ignore */ } }, 0);
           return; // stop here on first pass
         }

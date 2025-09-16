@@ -10,7 +10,7 @@ test.describe('Detective Board - smoke and console check', () => {
       const type = msg.type();
       const txt = msg.text();
       if (type === 'error') consoleErrors.push(txt);
-      if (type === 'warning' || type === 'warn') consoleWarnings.push(txt);
+      if (type === 'warning') consoleWarnings.push(txt);
       if (type === 'log' || type === 'info') consoleInfos.push(txt);
     });
 

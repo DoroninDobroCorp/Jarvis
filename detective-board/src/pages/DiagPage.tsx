@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../db';
-import type { AnyNode, GroupNode, LinkThread } from '../types';
+import type { AnyNode, LinkThread } from '../types';
 import { getLogger } from '../logger';
 
 interface GraphReport {
@@ -40,7 +40,7 @@ function analyze(nodes: AnyNode[], links: LinkThread[]): GraphReport {
       seenIdx.set(curr, path.length);
       path.push(curr);
       visitedGlobal.add(curr);
-      const next = byId.get(curr)?.parentId ?? null;
+      const next: string | null = byId.get(curr)?.parentId ?? null;
       curr = next;
       hops++;
     }
@@ -55,24 +55,25 @@ function analyze(nodes: AnyNode[], links: LinkThread[]): GraphReport {
 }
 
 export const DiagPage: React.FC = () => {
-  const log = getLogger('Diag');
+  const log = useMemo(() => getLogger('Diag'), []);
   const [nodes, setNodes] = useState<AnyNode[]>([]);
   const [links, setLinks] = useState<LinkThread[]>([]);
   const [loading, setLoading] = useState(false);
   const [fixing, setFixing] = useState(false);
   const [message, setMessage] = useState<string>('');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [n, l] = await Promise.all([db.nodes.toArray(), db.links.toArray()]);
       setNodes(n); setLinks(l);
+      log.info('load:db:snapshot', { nodes: n.length, links: l.length });
       setMessage('');
     } finally {
       setLoading(false);
     }
-  };
-  useEffect(() => { void load(); }, []);
+  }, [log]);
+  useEffect(() => { void load(); }, [load]);
 
   const report = useMemo(() => analyze(nodes, links), [nodes, links]);
 
