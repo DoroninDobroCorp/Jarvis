@@ -136,10 +136,11 @@ export const BoardCanvas: React.FC = () => {
   const findFreeSpot = useCallback((baseX: number, baseY: number, w: number, h: number, newParentId: string | null): { x: number; y: number } => {
     const atLevel = nodes.filter((n) => n.parentId === newParentId);
     const collides = (x: number, y: number) => atLevel.some((n) => rectsIntersect(x, y, w, h, n.x, n.y, n.width, n.height));
-    // простая спираль
-    const step = 24;
+    // компактная спираль вокруг базовой точки
+    const step = 16;
     let ring = 0;
-    while (ring < 60) {
+    const maxRings = 10; // ~160px от базовой точки
+    while (ring < maxRings) {
       const span = step * (ring + 1);
       for (let dx = -span; dx <= span; dx += step) {
         for (let dy = -span; dy <= span; dy += step) {
@@ -150,6 +151,7 @@ export const BoardCanvas: React.FC = () => {
       }
       ring++;
     }
+    // если не нашли рядом — возвращаем базовую точку (лучше близко, даже с пересечением)
     return { x: baseX, y: baseY };
   }, [nodes]);
 
@@ -594,9 +596,16 @@ export const BoardCanvas: React.FC = () => {
     if (insideGroup && nodeObj.parentId !== insideGroup.id) {
       if (isGroupNode) return; // не репарентим группы перетаскиванием, чтобы не "исчезали"
       if (isDescendant(insideGroup.id, nodeObj.id)) return; // не допускаем циклы для прочих
-      const localX = newX - insideGroup.x;
-      const localY = newY - insideGroup.y;
-      await useAppStore.getState().updateNode(nodeObj.id, { parentId: insideGroup.id, x: localX, y: localY });
+      // Ставим узел поближе к месту дропа внутри группы: к исходной точке, но с учётом отступа и занятости
+      const margin = 12;
+      let candX = newX - insideGroup.x;
+      let candY = newY - insideGroup.y;
+      candX = Math.max(margin, Math.min(insideGroup.width - nodeObj.width - margin, candX));
+      candY = Math.max(margin, Math.min(insideGroup.height - nodeObj.height - margin, candY));
+      const spot = findFreeSpot(candX, candY, nodeObj.width, nodeObj.height, insideGroup.id);
+      const clampX = Math.max(margin, Math.min(insideGroup.width - nodeObj.width - margin, spot.x));
+      const clampY = Math.max(margin, Math.min(insideGroup.height - nodeObj.height - margin, spot.y));
+      await useAppStore.getState().updateNode(nodeObj.id, { parentId: insideGroup.id, x: clampX, y: clampY });
       log.info('reparent:into-group', { node: nodeObj.id, group: insideGroup.id });
       return;
     }
@@ -608,15 +617,42 @@ export const BoardCanvas: React.FC = () => {
       const g = all.find((n) => n.id === nodeObj.parentId) as GroupNode | undefined;
       if (g) {
         const r = Math.min(g.width, g.height) / 2;
-        const gx = g.x + r;
-        const gy = g.y + r;
-        const d = Math.hypot(cx - gx, cy - gy);
-        const threshold = r + Math.max(nodeObj.width, nodeObj.height) * 0.35; // мягкий порог
-        if (d > threshold) {
-          const xAtLevelUp = newX + g.x;
-          const yAtLevelUp = newY + g.y;
-          await useAppStore.getState().updateNode(nodeObj.id, { parentId: g.parentId, x: xAtLevelUp, y: yAtLevelUp });
-          log.info('reparent:out-of-group', { node: nodeObj.id, from: g.id, to: g.parentId });
+        const halfW = nodeObj.width / 2;
+        const halfH = nodeObj.height / 2;
+        const margin = 16;
+        // Текущий уровень — это уровень группы?
+        if (parentId === g.id) {
+          // Мы ВНУТРИ группы: cx,cy заданы в локальных координатах группы.
+          const dLocal = Math.hypot(cx - r, cy - r);
+          const thresholdLocal = r + Math.max(halfW, halfH) * 0.35;
+          if (dLocal > thresholdLocal) {
+            const angle = Math.atan2(cy - r, cx - r);
+            const gxParent = g.x + r;
+            const gyParent = g.y + r;
+            const outCx = gxParent + Math.cos(angle) * (r + margin + halfW);
+            const outCy = gyParent + Math.sin(angle) * (r + margin + halfH);
+            const baseX = outCx - halfW;
+            const baseY = outCy - halfH;
+            const spot = findFreeSpot(baseX, baseY, nodeObj.width, nodeObj.height, g.parentId);
+            await useAppStore.getState().updateNode(nodeObj.id, { parentId: g.parentId, x: spot.x, y: spot.y });
+            log.info('reparent:out-of-group', { node: nodeObj.id, from: g.id, to: g.parentId });
+          }
+        } else {
+          // Мы на уровне родителя группы: cx,cy уже в координатах родителя.
+          const gxParent = g.x + r;
+          const gyParent = g.y + r;
+          const dParent = Math.hypot(cx - gxParent, cy - gyParent);
+          const thresholdParent = r + Math.max(halfW, halfH) * 0.35;
+          if (dParent > thresholdParent) {
+            const angle = Math.atan2(cy - gyParent, cx - gxParent);
+            const outCx = gxParent + Math.cos(angle) * (r + margin + halfW);
+            const outCy = gyParent + Math.sin(angle) * (r + margin + halfH);
+            const baseX = outCx - halfW;
+            const baseY = outCy - halfH;
+            const spot = findFreeSpot(baseX, baseY, nodeObj.width, nodeObj.height, g.parentId);
+            await useAppStore.getState().updateNode(nodeObj.id, { parentId: g.parentId, x: spot.x, y: spot.y });
+            log.info('reparent:out-of-group', { node: nodeObj.id, from: g.id, to: g.parentId });
+          }
         }
       }
     }
