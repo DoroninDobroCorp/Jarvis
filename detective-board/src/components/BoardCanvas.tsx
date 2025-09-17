@@ -86,6 +86,36 @@ function nodeDisplayName(n: AnyNode): string {
   return (n as GroupNode).name;
 }
 
+// Estimate multiline font size to fit into a given box (approximate, fast)
+function estimateTaskFont(text: string, base: number, contentW: number, contentH: number, lineH = 1.15) {
+  let s = base;
+  const minS = 10;
+  // up to 3 refinement iterations to converge
+  for (let i = 0; i < 3; i++) {
+    const charW = 0.6 * s || 1; // average char width heuristic
+    const charsPerLine = Math.max(1, Math.floor(contentW / charW));
+    const parts = String(text || '').split('\n');
+    let lines = 0;
+    for (const part of parts) {
+      const len = Math.max(1, part.length);
+      lines += Math.max(1, Math.ceil(len / charsPerLine));
+    }
+    const requiredH = lines * s * lineH;
+    if (requiredH <= contentH + 0.5) break;
+    const ratio = contentH / requiredH;
+    s = Math.max(minS, Math.floor(s * Math.max(0.5, ratio)));
+  }
+  return s;
+}
+
+// Fit single-line title into a given width by shrinking font size (keeps ellipsis as a fallback)
+function fitTitleFontSingleLine(text: string, base: number, width: number) {
+  const len = (text || '').length;
+  if (len === 0) return base;
+  const approxMax = width / (0.6 * len);
+  return clamp(Math.floor(Math.min(base, approxMax)), 10, 64);
+}
+
 export const BoardCanvas: React.FC = () => {
   const nodes = useAppStore((s) => s.nodes);
   const currentParentId = useAppStore((s) => s.currentParentId);
@@ -1079,6 +1109,38 @@ export const BoardCanvas: React.FC = () => {
                   <option value="high">Высокая</option>
                 </select>
               </label>
+              <fieldset className="inspector__fieldset" style={{ marginBottom: 6 }}>
+                <legend style={{ fontSize: 12, color: '#ccc' }}>Текст</legend>
+                <label className="radio" style={{ marginBottom: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={typeof (ctxNode as TaskNode).textSize !== 'number'}
+                    onChange={(e) => {
+                      const auto = e.target.checked;
+                      if (auto) {
+                        void useAppStore.getState().updateNode(ctxNode.id, { textSize: undefined });
+                      } else {
+                        const t = ctxNode as TaskNode;
+                        const base = Math.round(Math.min(t.width / 5, t.height / 2.4));
+                        void useAppStore.getState().updateNode(ctxNode.id, { textSize: Math.max(10, Math.min(72, base)) });
+                      }
+                    }}
+                  />
+                  <span>Авто размер текста</span>
+                </label>
+                <label style={{ display: 'block' }}>
+                  Размер текста
+                  <input
+                    type="range"
+                    min={10}
+                    max={72}
+                    step={1}
+                    disabled={typeof (ctxNode as TaskNode).textSize !== 'number'}
+                    value={(ctxNode as TaskNode).textSize ?? 16}
+                    onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { textSize: Number(e.target.value) }); }}
+                  />
+                </label>
+              </fieldset>
               <label style={{ display: 'block', marginBottom: 6 }}>Исполнитель (имя)
                 <input style={{ width: '100%' }} value={(ctxNode as TaskNode).assigneeName || ''} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { assigneeName: e.target.value }); }} placeholder="Имя" />
               </label>
@@ -1122,6 +1184,36 @@ export const BoardCanvas: React.FC = () => {
               <label style={{ display: 'block', marginBottom: 6 }}>Цвет
                 <input type="color" style={{ width: '100%' }} value={(ctxNode as GroupNode).color || '#AEC6CF'} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { color: e.target.value }); }} />
               </label>
+              <fieldset className="inspector__fieldset" style={{ marginBottom: 6 }}>
+                <legend style={{ fontSize: 12, color: '#ccc' }}>Заголовок</legend>
+                <label className="radio" style={{ marginBottom: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={typeof (ctxNode as GroupNode).titleSize !== 'number'}
+                    onChange={(e) => {
+                      const auto = e.target.checked;
+                      if (auto) {
+                        void useAppStore.getState().updateNode(ctxNode.id, { titleSize: undefined });
+                      } else {
+                        void useAppStore.getState().updateNode(ctxNode.id, { titleSize: 24 });
+                      }
+                    }}
+                  />
+                  <span>Авто размер заголовка</span>
+                </label>
+                <label style={{ display: 'block' }}>
+                  Размер заголовка
+                  <input
+                    type="range"
+                    min={10}
+                    max={64}
+                    step={1}
+                    disabled={typeof (ctxNode as GroupNode).titleSize !== 'number'}
+                    value={(ctxNode as GroupNode).titleSize ?? 24}
+                    onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { titleSize: Number(e.target.value) }); }}
+                  />
+                </label>
+              </fieldset>
               <button onClick={() => { if (window.confirm('Удалить выбранное?')) { void deleteSelection(); setCtxMenu(null); } }} style={{ display: 'block', width: '100%', marginTop: 8 }}>Удалить</button>
               {ctxNode.parentId ? (
                 <button style={{ display: 'block', width: '100%', marginTop: 6 }} onClick={async () => {
@@ -1256,7 +1348,13 @@ const NodeShape: React.FC<{
 
   if (isTask) {
     const t = node as TaskNode;
-    const fs = clamp(Math.min(t.width / 5, t.height / 2.4), 12, 72);
+    const padX = Math.max(8, Math.round(t.width * 0.06));
+    const padY = Math.max(6, Math.round(t.height * 0.05));
+    const contentW = Math.max(0, t.width - padX * 2);
+    const contentH = Math.max(0, t.height - padY * 2);
+    const textStr = `${t.iconEmoji ? t.iconEmoji + ' ' : ''}${t.assigneeEmoji ?? ''} ${t.assigneeName ? t.assigneeName + ': ' : ''}${t.title}${t.description ? '\n\n' + t.description : ''}`;
+    const baseFs = clamp(Math.min(t.width / 5, t.height / 2.4), 12, 72);
+    const fs = typeof t.textSize === 'number' ? t.textSize : estimateTaskFont(textStr, baseFs, contentW, contentH, 1.15);
     return (
       <KonvaGroup
         x={t.x}
@@ -1281,20 +1379,22 @@ const NodeShape: React.FC<{
           stroke={selected ? '#F05A5A' : '#00000030'}
           strokeWidth={selected ? 2 : 1}
         />
-        {/* text fills the rect */}
-        <Text
-          x={Math.max(8, Math.round(t.width * 0.06))}
-          y={Math.max(6, Math.round(t.height * 0.05))}
-          width={t.width - Math.max(16, Math.round(t.width * 0.12))}
-          height={t.height - Math.max(12, Math.round(t.height * 0.10))}
-          text={`${t.iconEmoji ? t.iconEmoji + ' ' : ''}${t.assigneeEmoji ?? ''} ${t.assigneeName ? t.assigneeName + ': ' : ''}${t.title}${t.description ? '\n\n' + t.description : ''}`}
-          fontSize={fs}
-          fill={'#3B2F2F'}
-          align="left"
-          verticalAlign="top"
-          wrap="word"
-          lineHeight={1.15}
-        />
+        {/* clipped text area to prevent overflow */}
+        <KonvaGroup x={padX} y={padY} clip={{ x: 0, y: 0, width: contentW, height: contentH }}>
+          <Text
+            x={0}
+            y={0}
+            width={contentW}
+            height={contentH}
+            text={textStr}
+            fontSize={fs}
+            fill={'#3B2F2F'}
+            align="left"
+            verticalAlign="top"
+            wrap="word"
+            lineHeight={1.15}
+          />
+        </KonvaGroup>
         {/* status dot when in_progress */}
         {t.status === 'in_progress' ? (
           <Circle x={t.width - 12} y={12} radius={6} fill={'#FF6B6B'} shadowBlur={8} />
@@ -1340,7 +1440,9 @@ const NodeShape: React.FC<{
   if (isGroup) {
     const g = node as GroupNode;
     const r = Math.min(g.width, g.height) / 2;
-    const groupFs = clamp(r / 1.6, 12, 64);
+    const baseGroup = clamp(r / 1.6, 12, 64);
+    const titleWidth = Math.max(0, g.width - 16);
+    const groupFs = typeof g.titleSize === 'number' ? g.titleSize : fitTitleFontSingleLine(g.name, baseGroup, titleWidth);
     const hasActive = groupHasActive(g.id);
     return (
       <KonvaGroup
@@ -1366,7 +1468,7 @@ const NodeShape: React.FC<{
           strokeWidth={1}
         />
         {/* title */}
-        <Text x={0} y={r - groupFs / 2} width={g.width} align="center" text={g.name} fontSize={groupFs} fill={'#2B1F1F'} fontStyle="bold" />
+        <Text x={8} y={r - groupFs / 2} width={titleWidth} align="center" text={g.name} fontSize={groupFs} fill={'#2B1F1F'} fontStyle="bold" wrap="none" ellipsis />
         {/* active indicator */}
         {hasActive ? (
           <Circle x={g.width - 12} y={12} radius={6} fill={'#FF6B6B'} shadowBlur={8} />
@@ -1442,7 +1544,7 @@ const NodeShape: React.FC<{
         ) : (
           <Text x={0} y={0} width={p.width} height={p.height} text={p.avatarEmoji || '👤'} fontSize={r * 1.8} align="center" verticalAlign="middle" />
         )}
-        <Text x={0} y={p.height + 4} width={p.width} align="center" text={p.name} fontSize={nameFs} fill={'#2B1F1F'} />
+        <Text x={4} y={p.height + 4} width={Math.max(0, p.width - 8)} align="center" text={p.name} fontSize={nameFs} fill={'#2B1F1F'} wrap="none" ellipsis />
         {selected ? (
           <>
             <Rect x={p.width - 14} y={p.height - 14} width={14} height={14} fill={'#6e5548'} cornerRadius={3} stroke={'#00000060'} strokeWidth={1} />

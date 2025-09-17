@@ -34,6 +34,7 @@ export interface TaskNode extends BaseNode {
   durationMinutes?: number; // optional planned duration
   status: TaskStatus;
   color?: string; // sticky note color
+  textSize?: number; // manual override for task text font size
 }
 
 export interface GroupNode extends BaseNode {
@@ -41,6 +42,7 @@ export interface GroupNode extends BaseNode {
   name: string;
   color?: string; // pastel fill color for bubble
   description?: string;
+  titleSize?: number; // manual override for group title font size
 }
 
 export type PersonRole = 'employee' | 'partner' | 'bot';
