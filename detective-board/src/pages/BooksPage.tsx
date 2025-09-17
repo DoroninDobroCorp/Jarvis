@@ -11,6 +11,8 @@ export const BooksPage: React.FC = () => {
   const [title, setTitle] = useState('');
   const [comment, setComment] = useState('');
   const [loading, setLoading] = useState(false);
+  const [urlEdits, setUrlEdits] = useState<Record<string, string>>({});
+  const [openControls, setOpenControls] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     const all = await db.books.orderBy('createdAt').reverse().toArray();
@@ -57,6 +59,29 @@ export const BooksPage: React.FC = () => {
     await load();
   };
 
+  const setCoverFromFile: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const input = e.target;
+    const id = input.getAttribute('data-id');
+    const file = input.files?.[0];
+    if (!id || !file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      await db.books.update(id, { coverUrl: String(reader.result) });
+      setUrlEdits((s) => ({ ...s, [id]: '' }));
+      await load();
+    };
+    reader.readAsDataURL(file);
+    // allow re-selecting the same file later
+    input.value = '';
+  };
+
+  const saveCoverUrl = async (id: string) => {
+    const u = (urlEdits[id] || '').trim();
+    if (!u) return;
+    await db.books.update(id, { coverUrl: u });
+    await load();
+  };
+
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
@@ -76,12 +101,29 @@ export const BooksPage: React.FC = () => {
             ) : (
               <div style={{ width: '100%', height: 260, background: '#f2f2f2', borderRadius: 6, marginBottom: 8, display: 'grid', placeItems: 'center' }}>Нет обложки</div>
             )}
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>{b.title}</div>
+            <div style={{ fontWeight: 700, color: '#000', marginBottom: 4 }}>{b.title}</div>
             {b.comment ? <div style={{ color: '#555', marginBottom: 8 }}>{b.comment}</div> : null}
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ color: '#888', fontSize: 12 }}>{new Date(b.createdAt).toLocaleDateString()}</span>
-              <button onClick={() => { if (confirm('Удалить книгу?')) { void removeItem(b.id); } }}>Удалить</button>
+              <div style={{ display: 'inline-flex', gap: 8 }}>
+                <button title="Обложка" aria-label="Обложка" onClick={() => setOpenControls((s) => ({ ...s, [b.id]: !s[b.id] }))}>🖼</button>
+                <button onClick={() => { if (confirm('Удалить книгу?')) { void removeItem(b.id); } }}>Удалить</button>
+              </div>
             </div>
+            {openControls[b.id] ? (
+              <div style={{ display: 'grid', gap: 6, marginBottom: 8 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input style={{ flex: 1 }} placeholder="Обложка (URL)" value={urlEdits[b.id] ?? ''} onChange={(e) => setUrlEdits((s) => ({ ...s, [b.id]: e.target.value }))} />
+                  <button onClick={() => { void saveCoverUrl(b.id); }}>Сохранить</button>
+                </div>
+                <div>
+                  <label style={{ display: 'inline-block' }}>
+                    <span style={{ marginRight: 8 }}>Загрузить файл</span>
+                    <input data-id={b.id} type="file" accept="image/*" onChange={setCoverFromFile} />
+                  </label>
+                </div>
+              </div>
+            ) : null}
           </div>
         ))}
       </div>

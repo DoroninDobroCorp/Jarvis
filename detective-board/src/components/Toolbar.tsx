@@ -85,6 +85,14 @@ export const Toolbar: React.FC = () => {
             <option value="/movies">Фильмы</option>
           </select>
         </div>
+        <div style={{ marginLeft: 12 }}>
+          <label style={{ color: 'var(--text)', marginRight: 6 }}>Режим</label>
+          <select aria-label="Режим производительности" title="Режим производительности" value={perfModeOverride} onChange={(e) => setPerfModeOverride(e.target.value as 'auto' | 'perf' | 'super')}>
+            <option value="auto">Авто</option>
+            <option value="perf">Эконом</option>
+            <option value="super">Супер</option>
+          </select>
+        </div>
         <div style={{ marginLeft: 12, display: 'inline-flex', gap: 6 }}>
           <button className="tool-btn" title="Отменить (Cmd/Ctrl+Z)" onClick={() => { void undo(); }}>↶ Отменить</button>
           <button className="tool-btn" title="Вернуть (Shift+Cmd/Ctrl+Z / Ctrl+Y)" onClick={() => { void redo(); }}>↷ Вернуть</button>
@@ -95,11 +103,6 @@ export const Toolbar: React.FC = () => {
               void document.exitFullscreen();
             }
           }}>⛶ Полноэкранно</button>
-          <select aria-label="Режим производительности" title="Режим производительности" value={perfModeOverride} onChange={(e) => setPerfModeOverride(e.target.value as 'auto' | 'perf' | 'super')}>
-            <option value="auto">Авто</option>
-            <option value="perf">Эконом</option>
-            <option value="super">Суперэконом</option>
-          </select>
           <button className="tool-btn" title="Очистить всю базу" onClick={() => { if (confirm('Очистить все данные? Это действие необратимо.')) { void resetAll(); } }}>🗑 Очистить всё</button>
           <span style={{ width: 8 }} />
           <button className="tool-btn" title="Экспорт в JSON" onClick={() => { log.info('export:click'); void exportBackup(); }}>⤓ Экспорт</button>

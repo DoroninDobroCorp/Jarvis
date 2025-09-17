@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Group as KonvaGroup, Circle, Rect, Text, Image as KonvaImage, Arrow } from 'react-konva';
 import { useAppStore } from '../store';
 import type { AnyNode, GroupNode, TaskNode, PersonNode, TaskStatus } from '../types';
@@ -43,6 +43,49 @@ function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
 }
 
+// Compute point on node border towards another node center (for nice arrow anchoring)
+function computeAnchorTowards(n: AnyNode, target: AnyNode) {
+  const c1 = computeNodeCenter(n);
+  const c2 = computeNodeCenter(target);
+  const dx = c2.cx - c1.cx;
+  const dy = c2.cy - c1.cy;
+  if (n.type === 'task') {
+    const hw = n.width / 2;
+    const hh = n.height / 2;
+    const s = Math.max(Math.abs(dx) / hw, Math.abs(dy) / hh) || 1;
+    return { x: c1.cx + dx / s, y: c1.cy + dy / s };
+  } else {
+    const r = Math.min(n.width, n.height) / 2;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    return { x: c1.cx + ux * r, y: c1.cy + uy * r };
+  }
+}
+
+// Compute point on node border towards arbitrary world point
+function computeAnchorTowardsPoint(n: AnyNode, p: { x: number; y: number }) {
+  const c1 = computeNodeCenter(n);
+  const dx = p.x - c1.cx;
+  const dy = p.y - c1.cy;
+  if (n.type === 'task') {
+    const hw = n.width / 2;
+    const hh = n.height / 2;
+    const s = Math.max(Math.abs(dx) / hw, Math.abs(dy) / hh) || 1;
+    return { x: c1.cx + dx / s, y: c1.cy + dy / s };
+  } else {
+    const r = Math.min(n.width, n.height) / 2;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    return { x: c1.cx + ux * r, y: c1.cy + uy * r };
+  }
+}
+
+function nodeDisplayName(n: AnyNode): string {
+  if (n.type === 'task') return (n as TaskNode).title;
+  if (n.type === 'person') return (n as PersonNode).name;
+  return (n as GroupNode).name;
+}
+
 export const BoardCanvas: React.FC = () => {
   const nodes = useAppStore((s) => s.nodes);
   const currentParentId = useAppStore((s) => s.currentParentId);
@@ -77,15 +120,48 @@ export const BoardCanvas: React.FC = () => {
   const { width, height } = useWindowSize();
 
   const stageRef = useRef<Konva.Stage | null>(null);
+  const levelGroupRef = useRef<Konva.Group | null>(null);
   const lastCenter = useRef<{ x: number; y: number } | null>(null);
   const lastDist = useRef<number>(0);
-
+  const lassoClickGuardRef = useRef<boolean>(false);
   const [pendingLinkFrom, setPendingLinkFrom] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
   const [linkCtxMenu, setLinkCtxMenu] = useState<{ x: number; y: number; linkId: string } | null>(null);
   const [lasso, setLasso] = useState<null | { x: number; y: number; w: number; h: number; additive: boolean }>(null);
   const [hoveredStub, setHoveredStub] = useState<string | null>(null);
+  const [hoveredLink, setHoveredLink] = useState<string | null>(null);
   const didAutoCenter = useRef<boolean>(false);
+
+  // Поиск свободного места на уровне (newParentId) рядом с базовой точкой
+  const findFreeSpot = useCallback((baseX: number, baseY: number, w: number, h: number, newParentId: string | null): { x: number; y: number } => {
+    const atLevel = nodes.filter((n) => n.parentId === newParentId);
+    const collides = (x: number, y: number) => atLevel.some((n) => rectsIntersect(x, y, w, h, n.x, n.y, n.width, n.height));
+    // простая спираль
+    const step = 24;
+    let ring = 0;
+    while (ring < 60) {
+      const span = step * (ring + 1);
+      for (let dx = -span; dx <= span; dx += step) {
+        for (let dy = -span; dy <= span; dy += step) {
+          const x = baseX + dx;
+          const y = baseY + dy;
+          if (!collides(x, y)) return { x, y };
+        }
+      }
+      ring++;
+    }
+    return { x: baseX, y: baseY };
+  }, [nodes]);
+
+  // World origin of current level (for nested groups): used to convert world -> local
+  const levelOrigin = useMemo(() => {
+    if (!currentParentId) return { x: 0, y: 0 };
+    const grp = nodes.find((n) => n.id === currentParentId) as GroupNode | undefined;
+    if (!grp) return { x: 0, y: 0 };
+    let x = grp.x, y = grp.y; let p = grp.parentId; const visited = new Set<string>(); let hops = 0;
+    while (p && !visited.has(p) && hops < 1000) { visited.add(p); const g = nodes.find((nn) => nn.id === p) as GroupNode | undefined; if (!g) break; x += g.x; y += g.y; p = g.parentId; hops++; }
+    return { x, y };
+  }, [currentParentId, nodes]);
 
   // Автоцентровка по "центру массы" видимых узлов один раз на старте/при входе в группу
   const levelBBox = useMemo(() => {
@@ -100,24 +176,75 @@ export const BoardCanvas: React.FC = () => {
     return { minX, minY, maxX, maxY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
   }, [visibleNodes]);
 
-  useEffect(() => {
+  // Сброс флага автоцентра ДО вычисления нового центра уровня, чтобы избежать видимого прыжка
+  useLayoutEffect(() => {
+    didAutoCenter.current = false;
+  }, [currentParentId]);
+
+  useLayoutEffect(() => {
     if (!levelBBox) return;
     if (!didAutoCenter.current) {
       const s = viewport.scale;
-      const nx = width / 2 - levelBBox.cx * s;
-      const ny = height / 2 - levelBBox.cy * s;
+      const nx = width / 2 - (levelOrigin.x + levelBBox.cx) * s;
+      const ny = height / 2 - (levelOrigin.y + levelBBox.cy) * s;
       setViewport({ x: nx, y: ny, scale: s });
       didAutoCenter.current = true;
       log.info('autocenter', { level: currentParentId, center: { x: levelBBox.cx, y: levelBBox.cy } });
     }
-  }, [levelBBox, viewport.scale, width, height, setViewport, currentParentId, log]);
+  }, [levelBBox, levelOrigin.x, levelOrigin.y, viewport.scale, width, height, setViewport, currentParentId, log]);
 
+  
+
+  // Если в группе нет детей — один раз центрируем локальный (0,0) в центр экрана, чтобы не было "пустоты"
+  useLayoutEffect(() => {
+    if (!currentParentId) return; // на корне не трогаем
+    if (visibleNodes.length === 0 && !didAutoCenter.current) {
+      const s = viewport.scale;
+      const targetX = width / 2 - levelOrigin.x * s;
+      const targetY = height / 2 - levelOrigin.y * s;
+      if (viewport.x !== targetX || viewport.y !== targetY) {
+        setViewport({ x: targetX, y: targetY, scale: s });
+      }
+      didAutoCenter.current = true;
+      log.debug('autocenter:empty-level', { parent: currentParentId });
+    }
+  }, [currentParentId, visibleNodes.length, levelOrigin.x, levelOrigin.y, width, height, viewport.scale, viewport.x, viewport.y, setViewport, log]);
+
+  // Принудительный редроу Stage при смене уровня/viewport/видимых узлов (фикс пустоты до первого действия)
   useEffect(() => {
-    // При смене уровня снова разрешаем автоцентр
-    didAutoCenter.current = false;
-  }, [currentParentId]);
+    try {
+      const s = stageRef.current as unknown as { batchDraw?: () => void } | null;
+      s?.batchDraw?.();
+    } catch {}
+  }, [currentParentId, visibleNodes.length, viewport.x, viewport.y, viewport.scale]);
 
   const ctxNode = useMemo(() => (ctxMenu ? nodes.find((n) => n.id === ctxMenu.nodeId) : null), [ctxMenu, nodes]);
+
+  // HUD-подсказка для связей рядом с курсором
+  const [hoverHUD, setHoverHUD] = useState<{ x: number; y: number; text: string } | null>(null);
+  const showLinkHud = useMemo(() => tool === 'link', [tool]);
+
+  // Безрыжковое центрирование: вычисляем целевые x/y для уровня и используем их сразу на первом кадре
+  const lastLevelRef = useRef<string | '__INIT__' | null>('__INIT__');
+  const desiredViewport = useMemo(() => {
+    const s = viewport.scale;
+    if (visibleNodes.length > 0 && levelBBox) {
+      return { x: width / 2 - (levelOrigin.x + levelBBox.cx) * s, y: height / 2 - (levelOrigin.y + levelBBox.cy) * s };
+    }
+    return { x: width / 2 - levelOrigin.x * s, y: height / 2 - levelOrigin.y * s };
+  }, [levelBBox, levelOrigin.x, levelOrigin.y, visibleNodes.length, width, height, viewport.scale]);
+  const isNewLevel = lastLevelRef.current !== currentParentId;
+  const notSynced = Math.abs(viewport.x - desiredViewport.x) > 0.5 || Math.abs(viewport.y - desiredViewport.y) > 0.5;
+  const initializing = isNewLevel || (!didAutoCenter.current) || notSynced;
+  const stageX = initializing ? desiredViewport.x : viewport.x;
+  const stageY = initializing ? desiredViewport.y : viewport.y;
+  useLayoutEffect(() => {
+    if (lastLevelRef.current !== currentParentId) {
+      setViewport({ x: desiredViewport.x, y: desiredViewport.y, scale: viewport.scale });
+      didAutoCenter.current = true;
+      lastLevelRef.current = currentParentId;
+    }
+  }, [currentParentId, desiredViewport.x, desiredViewport.y, setViewport, viewport.scale]);
 
   // wheel zoom
   const onWheel = useCallback((e: KonvaEventObject<WheelEvent>) => {
@@ -154,15 +281,30 @@ export const BoardCanvas: React.FC = () => {
     const stage = stageRef.current;
     const pointer = stage?.getPointerPosition();
     if (!pointer) return;
-    const worldX = (pointer.x - viewport.x) / viewport.scale;
-    const worldY = (pointer.y - viewport.y) / viewport.scale;
-    // Ctrl/Cmd -> рамочный выбор
+    // Точное преобразование указателя в локальные координаты уровня
+    let lx: number, ly: number;
+    const grp = levelGroupRef.current;
+    if (grp) {
+      const t = grp.getAbsoluteTransform().copy();
+      t.invert();
+      const p = t.point(pointer);
+      lx = p.x; ly = p.y;
+    } else {
+      const sx = stageRef.current ? stageRef.current.x() : viewport.x;
+      const sy = stageRef.current ? stageRef.current.y() : viewport.y;
+      const sc = stageRef.current ? stageRef.current.scaleX() : viewport.scale;
+      const worldX = (pointer.x - sx) / sc;
+      const worldY = (pointer.y - sy) / sc;
+      lx = worldX - levelOrigin.x;
+      ly = worldY - levelOrigin.y;
+    }
+    // Ctrl/Cmd -> рамочный выбор (локальные координаты уровня)
     if (e.evt.ctrlKey || e.evt.metaKey) {
       const additive = true; // всегда мультивыделение
-      setLasso({ x: worldX, y: worldY, w: 0, h: 0, additive });
+      setLasso({ x: lx, y: ly, w: 0, h: 0, additive });
       isPanningRef.current = false;
       lastPosRef.current = null;
-      log.debug('lasso:start', { x: worldX, y: worldY });
+      log.debug('lasso:start', { lx, ly });
       return;
     }
     // иначе панорамирование
@@ -177,9 +319,23 @@ export const BoardCanvas: React.FC = () => {
       const stage = stageRef.current;
       const pointer = stage?.getPointerPosition();
       if (!pointer) return;
-      const worldX = (pointer.x - viewport.x) / viewport.scale;
-      const worldY = (pointer.y - viewport.y) / viewport.scale;
-      setLasso((prev) => (prev ? { ...prev, w: worldX - prev.x, h: worldY - prev.y } : prev));
+      let lx: number, ly: number;
+      const grp = levelGroupRef.current;
+      if (grp) {
+        const t = grp.getAbsoluteTransform().copy();
+        t.invert();
+        const p = t.point(pointer);
+        lx = p.x; ly = p.y;
+      } else {
+        const sx = stageRef.current ? stageRef.current.x() : viewport.x;
+        const sy = stageRef.current ? stageRef.current.y() : viewport.y;
+        const sc = stageRef.current ? stageRef.current.scaleX() : viewport.scale;
+        const worldX = (pointer.x - sx) / sc;
+        const worldY = (pointer.y - sy) / sc;
+        lx = worldX - levelOrigin.x;
+        ly = worldY - levelOrigin.y;
+      }
+      setLasso((prev) => (prev ? { ...prev, w: lx - prev.x, h: ly - prev.y } : prev));
       return;
     }
     // pan
@@ -212,6 +368,8 @@ export const BoardCanvas: React.FC = () => {
       }
       setLasso(null);
       log.info('lasso:apply', { count: idsInRect.length });
+      // предотвратить немедленный сброс выделения кликом по Stage после рамочного выбора
+      lassoClickGuardRef.current = true;
       return;
     }
     isPanningRef.current = false;
@@ -269,89 +427,7 @@ export const BoardCanvas: React.FC = () => {
     log.debug('touch:end');
   }, [log]);
 
-  const handleNodeDragMove = useCallback((id: string, e: KonvaEventObject<DragEvent>) => {
-    const node = e.target;
-    const x = (node.x());
-    const y = (node.y());
-    moveNodeLocal(id, x, y);
-    log.debug('node:drag', { id, x, y });
-  }, [moveNodeLocal, log]);
-
-  const handleNodeDragEnd = useCallback((node: AnyNode, e: KonvaEventObject<DragEvent>) => {
-    // Сохраняем позицию и пробуем перепривязать к группе/из группы
-    const target = e.target;
-    const newX = target.x();
-    const newY = target.y();
-    void moveNode(node.id, newX, newY).then(async () => {
-      // reparent rules (только на текущем уровне)
-      const all = useAppStore.getState().nodes;
-      const parentId = useAppStore.getState().currentParentId;
-      // разрешаем репарент групп, но без циклов
-      const isChildOfGroup = node.parentId && all.find((n) => n.id === node.parentId && n.type === 'group');
-      const isGroupNode = node.type === 'group';
-      const isDescendant = (candidateId: string, possibleAncestorId: string): boolean => {
-        let p = (all.find((n) => n.id === candidateId) as AnyNode | undefined)?.parentId;
-        const visited = new Set<string>();
-        let hops = 0;
-        while (p && !visited.has(p) && hops < 1000) {
-          if (p === possibleAncestorId) return true;
-          visited.add(p);
-          const next = (all.find((n) => n.id === p) as AnyNode | undefined)?.parentId || null;
-          p = next;
-          hops++;
-        }
-        return false;
-      };
-      // Вычисляем абсолютные координаты центра
-      const absCenter = (() => {
-        let ax = newX + (node.width / 2);
-        let ay = newY + (node.height / 2);
-        if (isChildOfGroup) {
-          const g = all.find((n) => n.id === node.parentId) as GroupNode | undefined;
-          if (g) { ax += g.x; ay += g.y; }
-        }
-        return { ax, ay };
-      })();
-      // Ищем группу на уровне parentId, в которую попал центр
-      const levelGroups = all.filter((n): n is GroupNode => n.type === 'group' && n.parentId === parentId);
-      const insideGroup = levelGroups.find((g) => {
-        const r = Math.min(g.width, g.height) / 2;
-        const gx = g.x + r;
-        const gy = g.y + r;
-        const d = Math.hypot(absCenter.ax - gx, absCenter.ay - gy);
-        return d <= r;
-      });
-      if (insideGroup && node.parentId !== insideGroup.id) {
-        if (isGroupNode && isDescendant(insideGroup.id, node.id)) {
-          // нельзя поместить группу внутрь самой себя/потомка
-          return;
-        }
-        // Перемещаем в группу: делаем координаты локальными
-        const localX = absCenter.ax - insideGroup.x - node.width / 2;
-        const localY = absCenter.ay - insideGroup.y - node.height / 2;
-        await useAppStore.getState().updateNode(node.id, { parentId: insideGroup.id, x: localX, y: localY });
-        log.info('reparent:into-group', { node: node.id, group: insideGroup.id });
-        return;
-      }
-      // Если узел сейчас внутри группы, но центр вне её — вытащим на уровень
-      if (isChildOfGroup) {
-        const g = all.find((n) => n.id === node.parentId) as GroupNode | undefined;
-        if (g) {
-          const r = Math.min(g.width, g.height) / 2;
-          const gx = g.x + r;
-          const gy = g.y + r;
-          const d = Math.hypot(absCenter.ax - gx, absCenter.ay - gy);
-          if (d > r) {
-            // перенос на уровень parentId группы
-            const worldX = absCenter.ax - node.width / 2;
-            const worldY = absCenter.ay - node.height / 2;
-            await useAppStore.getState().updateNode(node.id, { parentId: g.parentId, x: worldX, y: worldY });
-            log.info('reparent:out-of-group', { node: node.id, from: g.id, to: g.parentId });
-          }
-        }
-      }
-    });
-  }, [moveNode, log]);
+  // удалены старые обработчики перетаскивания (перенесено ниже в мульти-логике)
 
   const handleNodeClick = useCallback((id: string, ev?: KonvaEventObject<MouseEvent>) => {
     if (tool !== 'link') {
@@ -457,9 +533,136 @@ export const BoardCanvas: React.FC = () => {
     log.debug('visible:update', { nodes: visibleNodes.length, links: renderedLinks.length, parent: currentParentId, tool });
   }, [visibleNodes, renderedLinks, currentParentId, tool, log]);
 
-  // Keyboard shortcuts
+  // Мультиперетаскивание: запоминаем стартовые позиции выбранных узлов
+  const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const handleNodeDragStart = useCallback((nodeId: string) => {
+    const ids = selection.includes(nodeId) ? selection : [nodeId];
+    const map = new Map<string, { x: number; y: number }>();
+    ids.forEach((id) => {
+      const n = nodes.find((nn) => nn.id === id);
+      if (n) map.set(id, { x: n.x, y: n.y });
+    });
+    dragStartRef.current = map;
+  }, [selection, nodes]);
+
+  const handleNodeDragMove = useCallback((nodeId: string, e: KonvaEventObject<DragEvent>) => {
+    const base = dragStartRef.current.get(nodeId);
+    const t = e.target;
+    if (!base) {
+      // fallback: двигать только один узел
+      moveNodeLocal(nodeId, t.x(), t.y());
+      return;
+    }
+    const dx = t.x() - base.x;
+    const dy = t.y() - base.y;
+    dragStartRef.current.forEach((pos, id) => {
+      moveNodeLocal(id, pos.x + dx, pos.y + dy);
+    });
+  }, [moveNodeLocal]);
+
+  // Вспомогательная функция репарентинга одного узла с правилами
+  const reparentOne = useCallback(async (nodeObj: AnyNode, newX: number, newY: number, forcedGroup?: GroupNode | null) => {
+    const all = useAppStore.getState().nodes;
+    const parentId = useAppStore.getState().currentParentId;
+    const isGroupNode = nodeObj.type === 'group';
+    const cx = newX + nodeObj.width / 2;
+    const cy = newY + nodeObj.height / 2;
+    const isDescendant = (candidateId: string, possibleAncestorId: string): boolean => {
+      let p = (all.find((n) => n.id === candidateId) as AnyNode | undefined)?.parentId;
+      const visited = new Set<string>();
+      let hops = 0;
+      while (p && !visited.has(p) && hops < 1000) {
+        if (p === possibleAncestorId) return true;
+        visited.add(p);
+        const next = (all.find((n) => n.id === p) as AnyNode | undefined)?.parentId || null;
+        p = next;
+        hops++;
+      }
+      return false;
+    };
+
+    // определяем целевую группу на уровне (либо принудительную)
+    const levelGroups = all.filter((n): n is GroupNode => n.type === 'group' && n.parentId === parentId);
+    const insideGroup = forcedGroup || levelGroups.find((g) => {
+      const r = Math.min(g.width, g.height) / 2;
+      const gx = g.x + r;
+      const gy = g.y + r;
+      const d = Math.hypot(cx - gx, cy - gy);
+      return d <= r;
+    }) || null;
+
+    if (insideGroup && nodeObj.parentId !== insideGroup.id) {
+      if (isGroupNode) return; // не репарентим группы перетаскиванием, чтобы не "исчезали"
+      if (isDescendant(insideGroup.id, nodeObj.id)) return; // не допускаем циклы для прочих
+      const localX = newX - insideGroup.x;
+      const localY = newY - insideGroup.y;
+      await useAppStore.getState().updateNode(nodeObj.id, { parentId: insideGroup.id, x: localX, y: localY });
+      log.info('reparent:into-group', { node: nodeObj.id, group: insideGroup.id });
+      return;
+    }
+
+    // авто-вынос из группы на уровень выше: только для НЕ-групп и с порогом
+    // и только если мы НЕ на уровне этой группы (иначе внутри группы узлы не должны "исчезать")
+    const isChildOfGroup = !!nodeObj.parentId && !!all.find((n) => n.id === nodeObj.parentId && n.type === 'group');
+    if (!isGroupNode && isChildOfGroup && nodeObj.parentId !== parentId) {
+      const g = all.find((n) => n.id === nodeObj.parentId) as GroupNode | undefined;
+      if (g) {
+        const r = Math.min(g.width, g.height) / 2;
+        const gx = g.x + r;
+        const gy = g.y + r;
+        const d = Math.hypot(cx - gx, cy - gy);
+        const threshold = r + Math.max(nodeObj.width, nodeObj.height) * 0.35; // мягкий порог
+        if (d > threshold) {
+          const xAtLevelUp = newX + g.x;
+          const yAtLevelUp = newY + g.y;
+          await useAppStore.getState().updateNode(nodeObj.id, { parentId: g.parentId, x: xAtLevelUp, y: yAtLevelUp });
+          log.info('reparent:out-of-group', { node: nodeObj.id, from: g.id, to: g.parentId });
+        }
+      }
+    }
+  }, [log]);
+
+  const handleNodeDragEnd = useCallback((node: AnyNode, e: KonvaEventObject<DragEvent>) => {
+    const t = e.target; const newX = t.x(); const newY = t.y();
+    const base = dragStartRef.current.get(node.id);
+    // Определяем целевую группу по лидеру
+    const all = useAppStore.getState().nodes;
+    const parentId = useAppStore.getState().currentParentId;
+    const cx = newX + node.width / 2; const cy = newY + node.height / 2;
+    const levelGroups = all.filter((n): n is GroupNode => n.type === 'group' && n.parentId === parentId);
+    const leaderInside = levelGroups.find((g) => {
+      const r = Math.min(g.width, g.height) / 2; const gx = g.x + r; const gy = g.y + r; return Math.hypot(cx - gx, cy - gy) <= r;
+    }) || null;
+
+    if (!base || dragStartRef.current.size <= 1) {
+      // одиночный перетаск
+      void moveNode(node.id, newX, newY).then(async () => { await reparentOne(node, newX, newY, leaderInside); });
+      dragStartRef.current.clear();
+      return;
+    }
+    // мультиперетаск: двигаем все по относительному смещению лидера
+    const dx = newX - base.x; const dy = newY - base.y;
+    const ids = Array.from(dragStartRef.current.keys());
+    // Сначала фиксируем новые позиции
+    Promise.all(ids.map(async (id) => {
+      const pos = dragStartRef.current.get(id)!;
+      await moveNode(id, pos.x + dx, pos.y + dy);
+    })).then(async () => {
+      // затем репарентим: если лидер вошёл в группу — всем одну группу
+      for (const id of ids) {
+        const n = useAppStore.getState().nodes.find((nn) => nn.id === id);
+        if (!n) continue;
+        const pos = dragStartRef.current.get(id)!;
+        const nx = pos.x + dx, ny = pos.y + dy;
+        await reparentOne(n as AnyNode, nx, ny, leaderInside);
+      }
+      dragStartRef.current.clear();
+    });
+  }, [moveNode, reparentOne]);
+
+  // Keyboard shortcuts: F — тумблер режима связей, T/G/E/R/B — инструменты добавления
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+    const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
       if (typing) return;
@@ -486,11 +689,36 @@ export const BoardCanvas: React.FC = () => {
         setEditingNodeId(null);
         setCtxMenu(null);
         setLinkCtxMenu(null);
+      } else if (e.key === 'f' || e.key === 'F') {
+        const now = useAppStore.getState().tool;
+        const next = now === 'link' ? 'none' : 'link';
+        setTool(next);
+        if (next !== 'link') setPendingLinkFrom(null);
+        log.debug('hotkey:F:toggle', { from: now, to: next });
+      } else {
+        // Добавление: T/G/E/R/B — тумблер инструментов
+        const k = e.key.toLowerCase();
+        const map: Record<string, typeof tool> = {
+          't': 'add-task',
+          'g': 'add-group',
+          'e': 'add-person-employee',
+          'r': 'add-person-partner',
+          'b': 'add-person-bot',
+        } as const;
+        if (k in map) {
+          const desired = map[k];
+          const now = useAppStore.getState().tool;
+          const next = now === desired ? 'none' : desired;
+          setTool(next);
+          log.debug('hotkey:add:toggle', { key: k, from: now, to: next });
+        }
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [deleteSelection, setSelection, setLinkSelection, setEditingNodeId, editingNodeId, selection.length, linkSelection.length, undo, redo]);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [deleteSelection, setSelection, setLinkSelection, setEditingNodeId, editingNodeId, selection.length, linkSelection.length, undo, redo, setTool, log]);
 
   // Inline editor overlay
   const editingNode = useMemo(() => nodes.find((n) => n.id === editingNodeId), [nodes, editingNodeId]);
@@ -556,8 +784,8 @@ export const BoardCanvas: React.FC = () => {
         height={height}
         scaleX={viewport.scale}
         scaleY={viewport.scale}
-        x={viewport.x}
-        y={viewport.y}
+        x={stageX}
+        y={stageY}
         onWheel={onWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
@@ -572,6 +800,7 @@ export const BoardCanvas: React.FC = () => {
           const clickedOnEmpty = e.target === stage;
           if (!clickedOnEmpty) return;
           if (tool === 'none') {
+            if (lassoClickGuardRef.current) { lassoClickGuardRef.current = false; return; }
             setSelection([]);
             setCtxMenu(null);
             if (lasso) return; // не сбрасываем при рамочном
@@ -582,31 +811,37 @@ export const BoardCanvas: React.FC = () => {
             (async () => {
               const pointer = stage.getPointerPosition();
               if (!pointer) return;
-              // convert to world coords
-              const worldX = (pointer.x - viewport.x) / viewport.scale;
-              const worldY = (pointer.y - viewport.y) / viewport.scale;
-              // convert to local coords if внутри группы
-              let lx = worldX; let ly = worldY;
-              if (currentParentId) {
-                let px = 0; let py = 0;
-                let p = nodes.find((n) => n.id === currentParentId) as GroupNode | undefined;
-                while (p) { px += p.x; py += p.y; p = p.parentId ? (nodes.find((n) => n.id === p!.parentId) as GroupNode | undefined) : undefined; }
-                lx = worldX - px; ly = worldY - py;
+              // Локальные координаты уровня через абсолютный трансформ группы
+              let lx: number, ly: number;
+              const grp = levelGroupRef.current;
+              if (grp) {
+                const t = grp.getAbsoluteTransform().copy();
+                t.invert();
+                const p = t.point(pointer);
+                lx = p.x; ly = p.y;
+              } else {
+                const sx = stageRef.current ? stageRef.current.x() : viewport.x;
+                const sy = stageRef.current ? stageRef.current.y() : viewport.y;
+                const sc = stageRef.current ? stageRef.current.scaleX() : viewport.scale;
+                const worldX = (pointer.x - sx) / sc;
+                const worldY = (pointer.y - sy) / sc;
+                lx = worldX - levelOrigin.x;
+                ly = worldY - levelOrigin.y;
               }
               if (tool === 'add-task') {
                 const id = await addTask({ x: lx, y: ly });
                 setSelection([id]);
-                log.info('create:task', { id, x: worldX, y: worldY });
+                log.info('create:task', { id, lx, ly });
               } else if (tool === 'add-group') {
                 const id = await addGroup('Группа', { x: lx, y: ly });
                 setSelection([id]);
-                log.info('create:group', { id, x: worldX, y: worldY });
+                log.info('create:group', { id, lx, ly });
               } else if (isAddPerson) {
                 const role = tool === 'add-person-partner' ? 'partner' : tool === 'add-person-bot' ? 'bot' : 'employee';
                 const name = role === 'partner' ? 'Партнер' : role === 'bot' ? 'Бот' : 'Сотрудник';
                 const id = await addPerson(name, role, { x: lx, y: ly });
                 setSelection([id]);
-                log.info('create:person', { id, x: worldX, y: worldY, role });
+                log.info('create:person', { id, lx, ly, role });
               }
               // one-shot tool: выключаем после создания
               setTool('none');
@@ -615,58 +850,70 @@ export const BoardCanvas: React.FC = () => {
         }}
       >
         <Layer>
-          {/* Lasso rectangle */}
-          {lasso ? (
-            <Rect
-              x={Math.min(lasso.x, lasso.x + lasso.w)}
-              y={Math.min(lasso.y, lasso.y + lasso.h)}
-              width={Math.abs(lasso.w)}
-              height={Math.abs(lasso.h)}
-              fill={"rgba(80,120,255,0.12)"}
-              stroke={"rgba(80,120,255,0.8)"}
-              strokeWidth={1}
-              dash={[6, 4]}
-            />
-          ) : null}
-          {linksToRender.map(({ base: l, from, to }) => {
-            const { cx: x1, cy: y1 } = computeNodeCenter(from);
-            const { cx: x2, cy: y2 } = computeNodeCenter(to);
-            const useBezier = !perfMode;
-            const mx = (x1 + x2) / 2;
-            const my = (y1 + y2) / 2 - 30; // slight arc
-            return (
-              <Arrow
-                key={`rl-${l.id}`}
-                points={useBezier ? [x1, y1, mx, my, x2, y2] : [x1, y1, x2, y2]}
-                stroke={l.color || '#C94545'}
-                strokeWidth={linkSelection.includes(l.id) ? 4 : 2}
-                tension={useBezier ? 0.5 : 0}
-                bezier={useBezier}
-                pointerLength={12}
-                pointerWidth={12}
-                fill={l.color || '#C94545'}
-                pointerAtBeginning={(l.dir || 'one') === 'both'}
-                hitStrokeWidth={40}
-                perfectDrawEnabled={false}
-                shadowColor={perfMode ? undefined : '#00000080'}
-                shadowBlur={perfMode ? 0 : (linkSelection.includes(l.id) ? 10 : 6)}
-                onClick={(ev) => {
-                  const evt = ev.evt as MouseEvent;
-                  if (evt.shiftKey || evt.metaKey || evt.ctrlKey) {
-                    const next = new Set<string>(linkSelection);
-                    if (next.has(l.id)) next.delete(l.id); else next.add(l.id);
-                    setLinkSelection(Array.from(next));
-                  } else {
-                    setLinkSelection([l.id]);
-                  }
-                  log.info('link:select', { id: l.id });
-                }}
-                onContextMenu={(ev) => {
-                  ev.evt.preventDefault();
-                  setLinkSelection([l.id]);
-                  setLinkCtxMenu({ x: ev.evt.clientX, y: ev.evt.clientY, linkId: l.id });
-                }}
+          <KonvaGroup ref={levelGroupRef} x={levelOrigin.x} y={levelOrigin.y}>
+            {/* Lasso rectangle */}
+            {lasso ? (
+              <Rect
+                x={Math.min(lasso.x, lasso.x + lasso.w)}
+                y={Math.min(lasso.y, lasso.y + lasso.h)}
+                width={Math.abs(lasso.w)}
+                height={Math.abs(lasso.h)}
+                fill={"rgba(80,120,255,0.12)"}
+                stroke={"rgba(80,120,255,0.8)"}
+                strokeWidth={1}
+                dash={[6, 4]}
               />
+            ) : null}
+            {linksToRender.map(({ base: l, from, to }) => {
+            const a = computeAnchorTowards(from, to);
+            const b = computeAnchorTowards(to, from);
+            const useBezier = !perfMode;
+            const mx = (a.x + b.x) / 2;
+            const my = (a.y + b.y) / 2 - 30;
+            const hasReverse = links.some((r) => r.fromId === l.toId && r.toId === l.fromId);
+            const stroke = l.color || '#C94545';
+            return (
+              <React.Fragment key={`rl-${l.id}`}>
+                <Arrow
+                  points={useBezier ? [a.x, a.y, mx, my, b.x, b.y] : [a.x, a.y, b.x, b.y]}
+                  stroke={stroke}
+                  strokeWidth={linkSelection.includes(l.id) ? 4 : 2}
+                  tension={useBezier ? 0.5 : 0}
+                  bezier={useBezier}
+                  pointerLength={18}
+                  pointerWidth={18}
+                  fill={stroke}
+                  pointerAtBeginning={(l.dir || 'one') === 'both' || hasReverse}
+                  hitStrokeWidth={40}
+                  perfectDrawEnabled={false}
+                  shadowColor={perfMode ? undefined : '#00000080'}
+                  shadowBlur={perfMode ? 0 : (linkSelection.includes(l.id) ? 10 : 6)}
+                  onMouseEnter={(ev) => {
+                    setHoveredLink(l.id);
+                    if (showLinkHud) setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: `${nodeDisplayName(from)} ${(l.dir==='both'||hasReverse)?'↔':'→'} ${nodeDisplayName(to)}` });
+                  }}
+                  onMouseMove={(ev) => {
+                    if (showLinkHud && hoveredLink === l.id) setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: `${nodeDisplayName(from)} ${(l.dir==='both'||hasReverse)?'↔':'→'} ${nodeDisplayName(to)}` });
+                  }}
+                  onMouseLeave={() => { setHoveredLink((p) => (p === l.id ? null : p)); setHoverHUD(null); }}
+                  onClick={(ev) => {
+                    const evt = ev.evt as MouseEvent;
+                    if (evt.shiftKey || evt.metaKey || evt.ctrlKey) {
+                      const next = new Set<string>(linkSelection);
+                      if (next.has(l.id)) next.delete(l.id); else next.add(l.id);
+                      setLinkSelection(Array.from(next));
+                    } else {
+                      setLinkSelection([l.id]);
+                    }
+                    log.info('link:select', { id: l.id });
+                  }}
+                  onContextMenu={(ev) => {
+                    ev.evt.preventDefault();
+                    setLinkSelection([l.id]);
+                    setLinkCtxMenu({ x: ev.evt.clientX, y: ev.evt.clientY, linkId: l.id });
+                  }}
+                />
+              </React.Fragment>
             );
           })}
 
@@ -711,35 +958,38 @@ export const BoardCanvas: React.FC = () => {
               if (!aVisible && !bVisible) return; // не относимся к текущему уровню
               const visibleNode = aVisible ? a : b;
               const hiddenNode = aVisible ? b : a;
-              const vC = computeNodeCenter(visibleNode);
-              const vLocal = { x: vC.cx, y: vC.cy };
+              // обе точки в координатах текущего уровня
+              const vWorld = getWorldCenter(visibleNode);
+              const vLocal = toLocal(vWorld);
               const hWorld = getWorldCenter(hiddenNode);
               const hLocal = toLocal(hWorld);
               // направляющий вектор
               const dx = hLocal.x - vLocal.x; const dy = hLocal.y - vLocal.y; const len = Math.hypot(dx, dy) || 1;
               const ux = dx / len, uy = dy / len;
-              const ex = vLocal.x + ux * 60; const ey = vLocal.y + uy * 60; // 60px штрих
-              const label = hiddenNode.type === 'task' ? (hiddenNode as TaskNode).title : hiddenNode.type === 'person' ? (hiddenNode as PersonNode).name : (hiddenNode as GroupNode).name;
+              // якорим старт по границе видимого узла в сторону скрытого
+              const start = computeAnchorTowardsPoint(visibleNode, hLocal);
+              const ex = start.x + ux * 60; const ey = start.y + uy * 60; // 60px штрих
+              const label = nodeDisplayName(hiddenNode);
               list.push(
                 <React.Fragment key={`stub-${l.id}`}>
                   {/* стрелочка усеченная: направление с учетом ориентации */}
                   {(() => {
                     const dir = l.dir || 'one';
                     const points = (() => {
-                      if (dir === 'both') return [vLocal.x, vLocal.y, ex, ey];
+                      if (dir === 'both') return [start.x, start.y, ex, ey];
                       // если from виден, рисуем от видимого наружу; иначе — к видимому внутрь
-                      return aVisible ? [vLocal.x, vLocal.y, ex, ey] : [ex, ey, vLocal.x, vLocal.y];
+                      return aVisible ? [start.x, start.y, ex, ey] : [ex, ey, start.x, start.y];
                     })();
                     return (
-                      <Arrow points={points} stroke={l.color || '#C94545'} fill={l.color || '#C94545'} strokeWidth={2} dash={[8, 6]} pointerLength={10} pointerWidth={10}
+                      <Arrow points={points} stroke={l.color || '#C94545'} fill={l.color || '#C94545'} strokeWidth={2} dash={[8, 6]} pointerLength={14} pointerWidth={14}
                         perfectDrawEnabled={false}
                         shadowColor={perfMode ? undefined : '#00000080'} shadowBlur={perfMode ? 0 : 6}
-                        onMouseEnter={() => setHoveredStub(l.id)} onMouseLeave={() => setHoveredStub((p) => (p === l.id ? null : p))} />
+                        hitStrokeWidth={40}
+                        onMouseEnter={(ev) => { setHoveredStub(l.id); if (showLinkHud) setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: `${(l.dir||'one')==='both' ? '↔' : '→'} ${label}` }); }}
+                        onMouseMove={(ev) => { if (showLinkHud && hoveredStub === l.id) setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: `${(l.dir||'one')==='both' ? '↔' : '→'} ${label}` }); }}
+                        onMouseLeave={() => { setHoveredStub((p) => (p === l.id ? null : p)); setHoverHUD(null); }} />
                     );
                   })()}
-                  {hoveredStub === l.id ? (
-                    <Text x={ex + 6} y={ey + 6} text={`→ ${label}`} fontSize={14} fill={'#333'} />
-                  ) : null}
                 </React.Fragment>
               );
             });
@@ -753,6 +1003,7 @@ export const BoardCanvas: React.FC = () => {
               key={n.id}
               node={n}
               selected={selection.includes(n.id)}
+              onDragStart={() => handleNodeDragStart(n.id)}
               onDragMove={(e) => handleNodeDragMove(n.id, e)}
               onDragEnd={(e) => handleNodeDragEnd(n, e)}
               onClick={(e) => { handleNodeClick(n.id, e); }}
@@ -764,11 +1015,12 @@ export const BoardCanvas: React.FC = () => {
               }}
             />
           ))}
+          </KonvaGroup>
         </Layer>
       </Stage>
       {ctxMenu && ctxNode ? (
         <div
-          style={{ position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 220, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
+          style={{ position: 'fixed', left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 360)), top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 480)), background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 240, maxHeight: Math.max(240, window.innerHeight - 16), overflowY: 'auto', boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
@@ -807,6 +1059,20 @@ export const BoardCanvas: React.FC = () => {
                 </select>
               </label>
               <button onClick={() => { if (window.confirm('Удалить выбранное?')) { void deleteSelection(); setCtxMenu(null); } }} style={{ display: 'block', width: '100%', marginTop: 8 }}>Удалить</button>
+              {ctxNode.parentId ? (
+                <button style={{ display: 'block', width: '100%', marginTop: 6 }} onClick={async () => {
+                  const all = useAppStore.getState().nodes;
+                  const parent = all.find((n) => n.id === ctxNode.parentId) as GroupNode | undefined;
+                  if (!parent) return;
+                  const newParentId: string | null = parent.parentId ?? null;
+                  // координаты на уровне выше = локальные + координаты группы
+                  const baseX = (ctxNode as TaskNode).x + parent.x;
+                  const baseY = (ctxNode as TaskNode).y + parent.y;
+                  const spot = findFreeSpot(baseX, baseY, (ctxNode as TaskNode).width, (ctxNode as TaskNode).height, newParentId);
+                  await useAppStore.getState().updateNode(ctxNode.id, { parentId: newParentId, x: spot.x, y: spot.y });
+                  setCtxMenu(null);
+                }}>Вывести из группы</button>
+              ) : null}
             </div>
           ) : ctxNode.type === 'group' ? (
             <div>
@@ -821,6 +1087,20 @@ export const BoardCanvas: React.FC = () => {
                 <input type="color" style={{ width: '100%' }} value={(ctxNode as GroupNode).color || '#AEC6CF'} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { color: e.target.value }); }} />
               </label>
               <button onClick={() => { if (window.confirm('Удалить выбранное?')) { void deleteSelection(); setCtxMenu(null); } }} style={{ display: 'block', width: '100%', marginTop: 8 }}>Удалить</button>
+              {ctxNode.parentId ? (
+                <button style={{ display: 'block', width: '100%', marginTop: 6 }} onClick={async () => {
+                  const all = useAppStore.getState().nodes;
+                  const parent = all.find((n) => n.id === ctxNode.parentId) as GroupNode | undefined;
+                  if (!parent) return;
+                  const newParentId: string | null = parent.parentId ?? null;
+                  const baseX = (ctxNode as GroupNode).x + parent.x;
+                  const baseY = (ctxNode as GroupNode).y + parent.y;
+                  const size = Math.max((ctxNode as GroupNode).width, (ctxNode as GroupNode).height);
+                  const spot = findFreeSpot(baseX, baseY, size, size, newParentId);
+                  await useAppStore.getState().updateNode(ctxNode.id, { parentId: newParentId, x: spot.x, y: spot.y });
+                  setCtxMenu(null);
+                }}>Вывести из группы</button>
+              ) : null}
             </div>
           ) : ctxNode.type === 'person' ? (
             <div style={{ marginTop: 8 }}>
@@ -847,6 +1127,20 @@ export const BoardCanvas: React.FC = () => {
                 }} />
               </label>
               <button onClick={() => { if (window.confirm('Удалить выбранное?')) { void deleteSelection(); setCtxMenu(null); } }} style={{ display: 'block', width: '100%', marginTop: 8 }}>Удалить</button>
+              {ctxNode.parentId ? (
+                <button style={{ display: 'block', width: '100%', marginTop: 6 }} onClick={async () => {
+                  const all = useAppStore.getState().nodes;
+                  const parent = all.find((n) => n.id === ctxNode.parentId) as GroupNode | undefined;
+                  if (!parent) return;
+                  const newParentId: string | null = parent.parentId ?? null;
+                  const baseX = (ctxNode as PersonNode).x + parent.x;
+                  const baseY = (ctxNode as PersonNode).y + parent.y;
+                  const size = Math.max((ctxNode as PersonNode).width, (ctxNode as PersonNode).height);
+                  const spot = findFreeSpot(baseX, baseY, size, size, newParentId);
+                  await useAppStore.getState().updateNode(ctxNode.id, { parentId: newParentId, x: spot.x, y: spot.y });
+                  setCtxMenu(null);
+                }}>Вывести из группы</button>
+              ) : null}
             </div>
           ) : null}
           <div style={{ textAlign: 'right', marginTop: 6 }}>
@@ -854,15 +1148,27 @@ export const BoardCanvas: React.FC = () => {
           </div>
         </div>
       ) : null}
+      {/* HUD-подсказка для связей: фиксированный размер рядом с курсором */}
+      {hoverHUD && showLinkHud ? (
+        <div style={{ position: 'fixed', left: hoverHUD.x + 12, top: hoverHUD.y + 12, background: '#fff', color: '#111', padding: '2px 6px', borderRadius: 4, boxShadow: '0 2px 10px rgba(0,0,0,0.2)', fontSize: 13, pointerEvents: 'none', zIndex: 1002 }}>
+          {hoverHUD.text}
+        </div>
+      ) : null}
       {linkCtxMenu ? (
         <div
-          style={{ position: 'fixed', left: linkCtxMenu.x, top: linkCtxMenu.y, background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 220, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
+          style={{ position: 'fixed', left: Math.max(8, Math.min(linkCtxMenu.x, window.innerWidth - 360)), top: Math.max(8, Math.min(linkCtxMenu.y, window.innerHeight - 320)), background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 240, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Связь</div>
           <label style={{ display: 'block', marginBottom: 6 }}>Цвет
             <input type="color" style={{ width: '100%' }} value={(useAppStore.getState().links.find((l) => l.id === linkCtxMenu.linkId)?.color) || '#C94545'} onChange={(e) => { void useAppStore.getState().updateLink(linkCtxMenu.linkId, { color: e.target.value }); }} />
+          </label>
+          <label style={{ display: 'block', marginBottom: 6 }}>Направление
+            <select style={{ width: '100%' }} value={(useAppStore.getState().links.find((l) => l.id === linkCtxMenu.linkId)?.dir) || 'one'} onChange={(e) => { const dir = e.target.value as 'one' | 'both'; void useAppStore.getState().updateLink(linkCtxMenu.linkId, { dir }); }}>
+              <option value="one">Однонаправленная</option>
+              <option value="both">Двунаправленная</option>
+            </select>
           </label>
           <div style={{ textAlign: 'right', marginTop: 6 }}>
             <button onClick={() => setLinkCtxMenu(null)}>Закрыть</button>
@@ -897,12 +1203,13 @@ export const BoardCanvas: React.FC = () => {
 const NodeShape: React.FC<{
   node: AnyNode;
   selected: boolean;
+  onDragStart: (e: KonvaEventObject<DragEvent>) => void;
   onDragMove: (e: KonvaEventObject<DragEvent>) => void;
   onDragEnd: (e: KonvaEventObject<DragEvent>) => void;
   onClick: (e: KonvaEventObject<MouseEvent>) => void;
   onDblClick: () => void;
   onContextMenu: (e: KonvaEventObject<PointerEvent>) => void;
-}> = ({ node, selected, onDragMove, onDragEnd, onClick, onDblClick, onContextMenu }) => {
+}> = ({ node, selected, onDragStart, onDragMove, onDragEnd, onClick, onDblClick, onContextMenu }) => {
   const isTask = node.type === 'task';
   const isGroup = node.type === 'group';
   const isPerson = node.type === 'person';
@@ -913,12 +1220,13 @@ const NodeShape: React.FC<{
 
   if (isTask) {
     const t = node as TaskNode;
-    const fs = clamp(Math.min(t.width / 5, t.height / 2.4), 16, 40);
+    const fs = clamp(Math.min(t.width / 5, t.height / 2.4), 12, 72);
     return (
       <KonvaGroup
         x={t.x}
         y={t.y}
         draggable
+        onDragStart={onDragStart}
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onClick={(e) => onClick(e)}
@@ -939,10 +1247,10 @@ const NodeShape: React.FC<{
         />
         {/* text fills the rect */}
         <Text
-          x={12}
-          y={10}
-          width={t.width - 24}
-          height={t.height - 20}
+          x={Math.max(8, Math.round(t.width * 0.06))}
+          y={Math.max(6, Math.round(t.height * 0.05))}
+          width={t.width - Math.max(16, Math.round(t.width * 0.12))}
+          height={t.height - Math.max(12, Math.round(t.height * 0.10))}
           text={`${t.iconEmoji ? t.iconEmoji + ' ' : ''}${t.assigneeEmoji ?? ''} ${t.assigneeName ? t.assigneeName + ': ' : ''}${t.title}${t.description ? '\n\n' + t.description : ''}`}
           fontSize={fs}
           fill={'#3B2F2F'}
@@ -956,30 +1264,38 @@ const NodeShape: React.FC<{
           <Circle x={t.width - 12} y={12} radius={6} fill={'#FF6B6B'} shadowBlur={8} />
         ) : null}
 
-        {/* resize handle (bottom-right) */}
+        {/* resize handle (bottom-right): хит-зона 15% от размеров */}
         {selected ? (
-          <Rect
-            x={t.width - 14}
-            y={t.height - 14}
-            width={14}
-            height={14}
-            fill={'#6e5548'}
-            cornerRadius={3}
-            stroke={'#00000060'}
-            strokeWidth={1}
-            draggable
-            onDragStart={(e) => { e.cancelBubble = true; }}
-            onDragMove={(e) => {
-              e.cancelBubble = true;
-              const hx = e.target.x();
-              const hy = e.target.y();
-              const minW = 120, minH = 80, maxW = 900, maxH = 700;
-              const newW = Math.max(minW, Math.min(maxW, hx + 14));
-              const newH = Math.max(minH, Math.min(maxH, hy + 14));
-              void updateNode(t.id, { width: newW, height: newH });
-            }}
-            onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: t.width - 14, y: t.height - 14 }); }}
-          />
+          <>
+            {/* видимый маркер */}
+            <Rect x={t.width - 14} y={t.height - 14} width={14} height={14} fill={'#6e5548'} cornerRadius={3} stroke={'#00000060'} strokeWidth={1} />
+            {/* увеличенная хит-зона, адаптивная к зуму */}
+            {(() => {
+              const hitW = Math.max(8, Math.round(t.width * 0.15));
+              const hitH = Math.max(8, Math.round(t.height * 0.15));
+              return (
+                <Rect
+                  x={t.width - hitW}
+                  y={t.height - hitH}
+                  width={hitW}
+                  height={hitH}
+                  opacity={0.001}
+                  draggable
+                  onDragStart={(e) => { e.cancelBubble = true; }}
+                  onDragMove={(e) => {
+                    e.cancelBubble = true;
+                    const hx = e.target.x();
+                    const hy = e.target.y();
+                    const minW = 120, minH = 80, maxW = 1600, maxH = 1200;
+                    const newW = Math.max(minW, Math.min(maxW, hx + hitW));
+                    const newH = Math.max(minH, Math.min(maxH, hy + hitH));
+                    void updateNode(t.id, { width: newW, height: newH });
+                  }}
+                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: t.width - hitW, y: t.height - hitH }); }}
+                />
+              );
+            })()}
+          </>
         ) : null}
       </KonvaGroup>
     );
@@ -988,13 +1304,14 @@ const NodeShape: React.FC<{
   if (isGroup) {
     const g = node as GroupNode;
     const r = Math.min(g.width, g.height) / 2;
-    const groupFs = clamp(r / 1.6, 16, 48);
+    const groupFs = clamp(r / 1.6, 12, 64);
     const hasActive = groupHasActive(g.id);
     return (
       <KonvaGroup
         x={g.x}
         y={g.y}
         draggable
+        onDragStart={onDragStart}
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onClick={(e) => onClick(e as unknown as KonvaEventObject<MouseEvent>)}
@@ -1019,27 +1336,35 @@ const NodeShape: React.FC<{
           <Circle x={g.width - 12} y={12} radius={6} fill={'#FF6B6B'} shadowBlur={8} />
         ) : null}
 
-        {/* resize handle for group (keeps square) */}
+        {/* resize handle for group (keeps square) — 15% от размеров */}
         {selected ? (
-          <Circle
-            x={g.width - 10}
-            y={g.height - 10}
-            radius={8}
-            fill={'#6e5548'}
-            stroke={'#00000060'}
-            strokeWidth={1}
-            draggable
-            onDragStart={(e) => { e.cancelBubble = true; }}
-            onDragMove={(e) => {
-              e.cancelBubble = true;
-              const hx = e.target.x();
-              const hy = e.target.y();
-              const pad = 10;
-              const size = Math.max(100, Math.min(900, Math.max(hx + pad, hy + pad)));
-              void updateNode(g.id, { width: size, height: size });
-            }}
-            onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: g.width - 10, y: g.height - 10 }); }}
-          />
+          <>
+            <Circle x={g.width - 10} y={g.height - 10} radius={8} fill={'#6e5548'} stroke={'#00000060'} strokeWidth={1} />
+            {(() => {
+              const hitW = Math.max(8, Math.round(g.width * 0.15));
+              const hitH = Math.max(8, Math.round(g.height * 0.15));
+              return (
+                <Rect
+                  x={g.width - hitW}
+                  y={g.height - hitH}
+                  width={hitW}
+                  height={hitH}
+                  opacity={0.001}
+                  draggable
+                  onDragStart={(e) => { e.cancelBubble = true; }}
+                  onDragMove={(e) => {
+                    e.cancelBubble = true;
+                    const hx = e.target.x();
+                    const hy = e.target.y();
+                    const minS = 100, maxS = 1600;
+                    const size = Math.max(minS, Math.min(maxS, Math.max(hx + hitW, hy + hitH)));
+                    void updateNode(g.id, { width: size, height: size });
+                  }}
+                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: g.width - hitW, y: g.height - hitH }); }}
+                />
+              );
+            })()}
+          </>
         ) : null}
       </KonvaGroup>
     );
@@ -1048,12 +1373,13 @@ const NodeShape: React.FC<{
   if (isPerson) {
     const p = node as PersonNode;
     const r = Math.min(p.width, p.height) / 2;
-    const nameFs = clamp(p.width / 4, 16, 36);
+    const nameFs = clamp(p.width / 4, 12, 48);
     return (
       <KonvaGroup
         x={p.x}
         y={p.y}
         draggable
+        onDragStart={onDragStart}
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onClick={(e) => onClick(e as unknown as KonvaEventObject<MouseEvent>)}
@@ -1082,27 +1408,33 @@ const NodeShape: React.FC<{
         )}
         <Text x={0} y={p.height + 4} width={p.width} align="center" text={p.name} fontSize={nameFs} fill={'#2B1F1F'} />
         {selected ? (
-          <Rect
-            x={p.width - 14}
-            y={p.height - 14}
-            width={14}
-            height={14}
-            fill={'#6e5548'}
-            cornerRadius={3}
-            stroke={'#00000060'}
-            strokeWidth={1}
-            draggable
-            onDragStart={(e) => { e.cancelBubble = true; }}
-            onDragMove={(e) => {
-              e.cancelBubble = true;
-              const hx = e.target.x();
-              const hy = e.target.y();
-              const minS = 80, maxS = 400;
-              const size = Math.max(minS, Math.min(maxS, Math.max(hx + 14, hy + 14)));
-              void updateNode(p.id, { width: size, height: size });
-            }}
-            onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: p.width - 14, y: p.height - 14 }); }}
-          />
+          <>
+            <Rect x={p.width - 14} y={p.height - 14} width={14} height={14} fill={'#6e5548'} cornerRadius={3} stroke={'#00000060'} strokeWidth={1} />
+            {(() => {
+              const hitW = Math.max(8, Math.round(p.width * 0.15));
+              const hitH = Math.max(8, Math.round(p.height * 0.15));
+              return (
+                <Rect
+                  x={p.width - hitW}
+                  y={p.height - hitH}
+                  width={hitW}
+                  height={hitH}
+                  opacity={0.001}
+                  draggable
+                  onDragStart={(e) => { e.cancelBubble = true; }}
+                  onDragMove={(e) => {
+                    e.cancelBubble = true;
+                    const hx = e.target.x();
+                    const hy = e.target.y();
+                    const minS = 80, maxS = 800;
+                    const size = Math.max(minS, Math.min(maxS, Math.max(hx + hitW, hy + hitH)));
+                    void updateNode(p.id, { width: size, height: size });
+                  }}
+                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: p.width - hitW, y: p.height - hitH }); }}
+                />
+              );
+            })()}
+          </>
         ) : null}
       </KonvaGroup>
     );

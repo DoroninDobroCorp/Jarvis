@@ -11,6 +11,8 @@ export const MoviesPage: React.FC = () => {
   const [title, setTitle] = useState('');
   const [comment, setComment] = useState('');
   const [loading, setLoading] = useState(false);
+  const [urlEdits, setUrlEdits] = useState<Record<string, string>>({});
+  const [openControls, setOpenControls] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     const all = await db.movies.orderBy('createdAt').reverse().toArray();
@@ -60,6 +62,28 @@ export const MoviesPage: React.FC = () => {
     await load();
   };
 
+  const setPosterFromFile: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const input = e.target;
+    const id = input.getAttribute('data-id');
+    const file = input.files?.[0];
+    if (!id || !file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      await db.movies.update(id, { coverUrl: String(reader.result) });
+      setUrlEdits((s) => ({ ...s, [id]: '' }));
+      await load();
+    };
+    reader.readAsDataURL(file);
+    input.value = '';
+  };
+
+  const savePosterUrl = async (id: string) => {
+    const u = (urlEdits[id] || '').trim();
+    if (!u) return;
+    await db.movies.update(id, { coverUrl: u });
+    await load();
+  };
+
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
@@ -79,12 +103,29 @@ export const MoviesPage: React.FC = () => {
             ) : (
               <div style={{ width: '100%', height: 260, background: '#f2f2f2', borderRadius: 6, marginBottom: 8, display: 'grid', placeItems: 'center' }}>Нет постера</div>
             )}
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>{m.title}</div>
+            <div style={{ fontWeight: 700, color: '#000', marginBottom: 4 }}>{m.title}</div>
             {m.comment ? <div style={{ color: '#555', marginBottom: 8 }}>{m.comment}</div> : null}
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ color: '#888', fontSize: 12 }}>{new Date(m.createdAt).toLocaleDateString()}</span>
-              <button onClick={() => { if (confirm('Удалить фильм?')) { void removeItem(m.id); } }}>Удалить</button>
+              <div style={{ display: 'inline-flex', gap: 8 }}>
+                <button title="Постер" aria-label="Постер" onClick={() => setOpenControls((s) => ({ ...s, [m.id]: !s[m.id] }))}>🖼</button>
+                <button onClick={() => { if (confirm('Удалить фильм?')) { void removeItem(m.id); } }}>Удалить</button>
+              </div>
             </div>
+            {openControls[m.id] ? (
+              <div style={{ display: 'grid', gap: 6, marginBottom: 8 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input style={{ flex: 1 }} placeholder="Постер (URL)" value={urlEdits[m.id] ?? ''} onChange={(e) => setUrlEdits((s) => ({ ...s, [m.id]: e.target.value }))} />
+                  <button onClick={() => { void savePosterUrl(m.id); }}>Сохранить</button>
+                </div>
+                <div>
+                  <label style={{ display: 'inline-block' }}>
+                    <span style={{ marginRight: 8 }}>Загрузить файл</span>
+                    <input data-id={m.id} type="file" accept="image/*" onChange={setPosterFromFile} />
+                  </label>
+                </div>
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
