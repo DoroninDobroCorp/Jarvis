@@ -154,6 +154,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           assigneeEmoji: '🧠',
           createdAt: now(),
           updatedAt: now(),
+          isActual: true,
         };
         const rootGroup: GroupNode = {
           id: uuidv4(),
@@ -167,6 +168,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           color: '#9CC5B0',
           createdAt: now(),
           updatedAt: now(),
+          isActual: true,
         };
         const innerTask: TaskNode = {
           id: uuidv4(),
@@ -183,6 +185,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           assigneeEmoji: '🧑‍💼',
           createdAt: now(),
           updatedAt: now(),
+          isActual: true,
         };
         await db.nodes.bulkAdd([rootTask1, rootGroup, innerTask]);
         set({ nodes: [rootTask1, rootGroup, innerTask], links, users, initialized: true });
@@ -209,6 +212,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         assigneeEmoji: '🧠',
         createdAt: now(),
         updatedAt: now(),
+        isActual: true,
       };
       const rootGroup: GroupNode = {
         id: uuidv4(),
@@ -222,6 +226,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         color: '#9CC5B0',
         createdAt: now(),
         updatedAt: now(),
+        isActual: true,
       };
       const innerTask: TaskNode = {
         id: uuidv4(),
@@ -238,6 +243,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         assigneeEmoji: '🧑‍💼',
         createdAt: now(),
         updatedAt: now(),
+        isActual: true,
       };
       set({ nodes: [rootTask1, rootGroup, innerTask], links: [], users: [], initialized: true });
       log.info('init:memory-fallback-ready', { nodes: 3, links: 0, users: 0 });
@@ -276,6 +282,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       color: colorByRole[role],
       createdAt: now(),
       updatedAt: now(),
+      isActual: true,
     };
     await db.nodes.add(node);
     set((s) => ({ nodes: [...s.nodes, node] }));
@@ -350,6 +357,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       color: '#9CC5B0',
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      isActual: true,
     };
 
     // persist group
@@ -403,6 +411,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       color: partial.color ?? '#E8D8A6',
       createdAt: now(),
       updatedAt: now(),
+      isActual: true,
     };
     await db.nodes.add(node);
     set((s) => ({ nodes: [...s.nodes, node] }));
@@ -426,6 +435,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       color: '#AEC6CF',
       createdAt: now(),
       updatedAt: now(),
+      isActual: true,
     };
     await db.nodes.add(node);
     set((s) => ({ nodes: [...s.nodes, node] }));

@@ -19,6 +19,7 @@ export interface BaseNode {
   height: number;
   createdAt: number;
   updatedAt: number;
+  isActual?: boolean; // default true; when false render at 50% opacity
 }
 
 export interface TaskNode extends BaseNode {

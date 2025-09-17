@@ -1109,6 +1109,14 @@ export const BoardCanvas: React.FC = () => {
                   <option value="high">Высокая</option>
                 </select>
               </label>
+              <label className="radio" style={{ marginBottom: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={(ctxNode as TaskNode).isActual !== false}
+                  onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { isActual: e.target.checked }); }}
+                />
+                <span>Актуальный</span>
+              </label>
               <fieldset className="inspector__fieldset" style={{ marginBottom: 6 }}>
                 <legend style={{ fontSize: 12, color: '#ccc' }}>Текст</legend>
                 <label className="radio" style={{ marginBottom: 6 }}>
@@ -1184,6 +1192,14 @@ export const BoardCanvas: React.FC = () => {
               <label style={{ display: 'block', marginBottom: 6 }}>Цвет
                 <input type="color" style={{ width: '100%' }} value={(ctxNode as GroupNode).color || '#AEC6CF'} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { color: e.target.value }); }} />
               </label>
+              <label className="radio" style={{ marginBottom: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={(ctxNode as GroupNode).isActual !== false}
+                  onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { isActual: e.target.checked }); }}
+                />
+                <span>Актуальный</span>
+              </label>
               <fieldset className="inspector__fieldset" style={{ marginBottom: 6 }}>
                 <legend style={{ fontSize: 12, color: '#ccc' }}>Заголовок</legend>
                 <label className="radio" style={{ marginBottom: 6 }}>
@@ -1244,6 +1260,14 @@ export const BoardCanvas: React.FC = () => {
               </label>
               <label style={{ display: 'block', marginBottom: 4 }}>Фото (URL)
                 <input style={{ width: '100%' }} value={(ctxNode as PersonNode).avatarUrl || ''} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { avatarUrl: e.target.value }); }} placeholder="https://..." />
+              </label>
+              <label className="radio" style={{ marginBottom: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={(ctxNode as PersonNode).isActual !== false}
+                  onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { isActual: e.target.checked }); }}
+                />
+                <span>Актуальный</span>
               </label>
               <label style={{ display: 'block', marginBottom: 4 }}>Загрузить фото
                 <input type="file" accept="image/*" onChange={(e) => {
@@ -1359,6 +1383,7 @@ const NodeShape: React.FC<{
       <KonvaGroup
         x={t.x}
         y={t.y}
+        opacity={t.isActual === false ? 0.5 : 1}
         draggable
         onDragStart={onDragStart}
         onDragMove={onDragMove}
@@ -1448,6 +1473,7 @@ const NodeShape: React.FC<{
       <KonvaGroup
         x={g.x}
         y={g.y}
+        opacity={g.isActual === false ? 0.5 : 1}
         draggable
         onDragStart={onDragStart}
         onDragMove={onDragMove}
@@ -1516,6 +1542,7 @@ const NodeShape: React.FC<{
       <KonvaGroup
         x={p.x}
         y={p.y}
+        opacity={p.isActual === false ? 0.5 : 1}
         draggable
         onDragStart={onDragStart}
         onDragMove={onDragMove}
