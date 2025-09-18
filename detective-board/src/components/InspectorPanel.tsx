@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../store';
-import type { AnyNode, GroupNode, TaskNode, TaskStatus, PersonNode, PersonRole } from '../types';
+import type { AnyNode, GroupNode, TaskNode, TaskStatus, PersonNode, PersonRole, Recurrence } from '../types';
 import { getLogger } from '../logger';
+import { computeNextDueDate, todayYMD, toIsoUTCFromYMD } from '../recurrence';
 
 export const InspectorPanel: React.FC = () => {
   const selection = useAppStore((s) => s.selection);
@@ -9,6 +10,7 @@ export const InspectorPanel: React.FC = () => {
   const updateNode = useAppStore((s) => s.updateNode);
   const enterGroup = useAppStore((s) => s.enterGroup);
   const log = getLogger('Inspector');
+  const [recOpen, setRecOpen] = useState(false);
 
   const node = useMemo<AnyNode | undefined>(() => {
     if (selection.length !== 1) return undefined;
@@ -34,6 +36,17 @@ export const InspectorPanel: React.FC = () => {
 
   if (node.type === 'task') {
     const t = node as TaskNode;
+    const setRecurrence = (rec: Recurrence) => {
+      const nextDue = computeNextDueDate(rec, new Date());
+      void updateNode(t.id, { recurrence: rec, dueDate: nextDue ?? t.dueDate });
+    };
+    const quick = {
+      daily: () => setRecurrence({ kind: 'daily' }),
+      weeklyThu: () => setRecurrence({ kind: 'weekly', weekday: 4 }), // Thu (0=Sun)
+      monthly28: () => setRecurrence({ kind: 'monthly', day: 28 }),
+      every7: () => setRecurrence({ kind: 'interval', everyDays: 7, anchorDate: new Date().toISOString() }),
+      none: () => setRecurrence({ kind: 'none' }),
+    } as const;
     return (
       <div className="inspector">
         <div className="inspector__title">Задача</div>
@@ -46,20 +59,98 @@ export const InspectorPanel: React.FC = () => {
           <textarea value={t.description || ''} onChange={(e) => updateNode(t.id, { description: e.target.value })} />
         </label>
         <label>
-          Исполнитель (смайл)
-          <input value={t.assigneeEmoji || ''} onChange={(e) => updateNode(t.id, { assigneeEmoji: e.target.value })} placeholder="🙂" />
-        </label>
-        <label>
-          Имя исполнителя
-          <input value={t.assigneeName || ''} onChange={(e) => updateNode(t.id, { assigneeName: e.target.value })} placeholder="Имя" />
-        </label>
-        <label>
           Цвет стикера
           <input type="color" value={(t.color || '#E8D8A6')} onChange={(e) => updateNode(t.id, { color: e.target.value })} />
         </label>
         <label>
           Срок
-          <input type="date" value={t.dueDate ? t.dueDate.slice(0, 10) : ''} onChange={(e) => updateNode(t.id, { dueDate: e.target.value ? new Date(e.target.value).toISOString() : undefined })} />
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="date"
+              value={t.dueDate ? t.dueDate.slice(0, 10) : ''}
+              onChange={(e) => updateNode(t.id, { dueDate: e.target.value ? toIsoUTCFromYMD(e.target.value) : undefined })}
+            />
+            <button type="button" className="tool-btn" title="Повтор" onClick={() => setRecOpen((v) => !v)}>⟲ Повтор</button>
+          </div>
+          {recOpen && (
+            <div style={{ marginTop: 6, padding: 8, border: '1px solid #ccc', borderRadius: 6, background: '#fafafa', display: 'grid', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button type="button" className="tool-btn" onClick={quick.daily}>Каждый день</button>
+                <button type="button" className="tool-btn" onClick={quick.weeklyThu}>Каждый четверг</button>
+                <button type="button" className="tool-btn" onClick={quick.monthly28}>Каждое 28-е</button>
+                <button type="button" className="tool-btn" onClick={quick.every7}>Каждые 7 дней</button>
+                <button type="button" className="tool-btn" onClick={quick.none}>Без повтора</button>
+              </div>
+              {/* Расширенные опции */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
+                <fieldset className="inspector__fieldset">
+                  <legend>Произвольно</legend>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
+                      <span>Еженедельно:</span>
+                      <select
+                        value={typeof t.recurrence === 'object' && t.recurrence?.kind === 'weekly' ? String(t.recurrence.weekday) : ''}
+                        onChange={(e) => {
+                          const w = Number(e.target.value);
+                          setRecurrence({ kind: 'weekly', weekday: isNaN(w) ? 1 : w });
+                        }}
+                      >
+                        <option value="">— выбрать —</option>
+                        <option value={1}>Понедельник</option>
+                        <option value={2}>Вторник</option>
+                        <option value={3}>Среда</option>
+                        <option value={4}>Четверг</option>
+                        <option value={5}>Пятница</option>
+                        <option value={6}>Суббота</option>
+                        <option value={0}>Воскресенье</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: 6 }}>
+                      <span>Ежемесячно:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        value={typeof t.recurrence === 'object' && t.recurrence?.kind === 'monthly' ? t.recurrence.day : ''}
+                        onChange={(e) => {
+                          const day = Math.max(1, Math.min(31, Number(e.target.value) || 1));
+                          setRecurrence({ kind: 'monthly', day });
+                        }}
+                        placeholder="День месяца"
+                      />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 1fr', alignItems: 'center', gap: 6 }}>
+                      <span>Интервал:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={typeof t.recurrence === 'object' && t.recurrence?.kind === 'interval' ? t.recurrence.everyDays : ''}
+                        onChange={(e) => {
+                          const n = Math.max(1, Number(e.target.value) || 1);
+                          const anchor = (typeof t.recurrence === 'object' && t.recurrence?.kind === 'interval') ? t.recurrence.anchorDate : new Date().toISOString();
+                          setRecurrence({ kind: 'interval', everyDays: n, anchorDate: anchor });
+                        }}
+                        placeholder="Каждые N дней"
+                      />
+                      <input
+                        type="date"
+                        value={typeof t.recurrence === 'object' && t.recurrence?.kind === 'interval' ? (t.recurrence.anchorDate.slice(0,10)) : todayYMD()}
+                        onChange={(e) => {
+                          const anchor = e.target.value ? toIsoUTCFromYMD(e.target.value) : new Date().toISOString();
+                          const n = (typeof t.recurrence === 'object' && t.recurrence?.kind === 'interval') ? t.recurrence.everyDays : 7;
+                          setRecurrence({ kind: 'interval', everyDays: n, anchorDate: anchor });
+                        }}
+                        title="Начинать с"
+                      />
+                    </div>
+                  </div>
+                </fieldset>
+                <div style={{ fontSize: 12, color: '#666' }}>
+                  Текущий повтор: {t.recurrence ? JSON.stringify(t.recurrence) : 'без повтора'}
+                </div>
+              </div>
+            </div>
+          )}
         </label>
         <label>
           Срочность

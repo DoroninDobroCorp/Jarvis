@@ -3,6 +3,7 @@ import { db } from './db';
 import type { AnyNode, GroupNode, LinkThread, TaskNode, Tool, TaskStatus, PersonNode, PersonRole } from './types';
 import { v4 as uuidv4 } from 'uuid';
 import { getLogger } from './logger';
+import { computeNextDueDate, toIsoUTCFromYMD } from './recurrence';
 
 export interface AppState {
   nodes: AnyNode[];
@@ -102,6 +103,41 @@ export const useAppStore = create<AppState>((set, get) => ({
         db.users.toArray(),
       ]);
 
+      // Normalize dueDate to midnight UTC and auto-apply recurrence rules on load
+      const nodesCopy: AnyNode[] = nodes.slice();
+      const toUpdate: AnyNode[] = [];
+      for (let i = 0; i < nodesCopy.length; i++) {
+        const n = nodesCopy[i];
+        if (n.type === 'task') {
+          const t = n as TaskNode;
+          // Normalize dueDate to YYYY-MM-DDT00:00:00.000Z
+          if (t.dueDate) {
+            const key = t.dueDate.slice(0, 10);
+            const normalized = toIsoUTCFromYMD(key);
+            if (t.dueDate !== normalized) {
+              const upd: TaskNode = { ...t, dueDate: normalized, updatedAt: now() };
+              nodesCopy[i] = upd; toUpdate.push(upd);
+            }
+          }
+          if (t.recurrence && t.recurrence.kind !== 'none') {
+            const nextDue = computeNextDueDate(t.recurrence, new Date());
+            if (nextDue) {
+              const prevYmd = t.dueDate ? t.dueDate.slice(0, 10) : '';
+              const nextYmd = nextDue.slice(0, 10);
+              if (prevYmd !== nextYmd) {
+                const updated: TaskNode = { ...t, dueDate: nextDue, updatedAt: now() };
+                nodesCopy[i] = updated;
+                toUpdate.push(updated);
+              }
+            }
+          }
+        }
+      }
+      if (toUpdate.length) {
+        await db.nodes.bulkPut(toUpdate);
+        log.info('init:recurrence:applied', { updated: toUpdate.length });
+      }
+
       // Dev-only analytics: detect parentId cycles and log a warning to avoid hidden hangs
       try {
         const map = new Map<string, string | null>();
@@ -136,7 +172,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         log.warn('init:graph:analyze-failed', { error: String(e instanceof Error ? e.message : e) });
       }
 
-      if (nodes.length === 0) {
+      if (nodesCopy.length === 0) {
         // seed demo data
         log.warn('init:empty-db, seeding demo data');
         const rootTask1: TaskNode = {
@@ -151,7 +187,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           description: 'Добавить задачи и объединить в группы',
           status: 'in_progress',
           color: '#E8D8A6',
-          assigneeEmoji: '🧠',
           createdAt: now(),
           updatedAt: now(),
           isActual: true,
@@ -182,7 +217,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           description: 'Согласовать партию Y',
           status: 'inactive',
           color: '#F1C0B9',
-          assigneeEmoji: '🧑‍💼',
           createdAt: now(),
           updatedAt: now(),
           isActual: true,
@@ -191,8 +225,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ nodes: [rootTask1, rootGroup, innerTask], links, users, initialized: true });
         log.info('init:seeded', { nodes: 3, links: links.length, users: users.length });
       } else {
-        set({ nodes, links, users, initialized: true });
-        log.info('init:loaded', { nodes: nodes.length, links: links.length, users: users.length });
+        set({ nodes: nodesCopy, links, users, initialized: true });
+        log.info('init:loaded', { nodes: nodesCopy.length, links: links.length, users: users.length });
       }
     } catch (err) {
       // Fallback to in-memory state (no persistence)
@@ -209,7 +243,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         description: 'Добавить задачи и объединить в группы',
         status: 'in_progress',
         color: '#E8D8A6',
-        assigneeEmoji: '🧠',
         createdAt: now(),
         updatedAt: now(),
         isActual: true,
@@ -240,7 +273,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         description: 'Согласовать партию Y',
         status: 'inactive',
         color: '#F1C0B9',
-        assigneeEmoji: '🧑‍💼',
         createdAt: now(),
         updatedAt: now(),
         isActual: true,
@@ -402,13 +434,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       height: 140,
       title: partial.title ?? 'Новая задача',
       description: partial.description,
-      assigneeId: partial.assigneeId,
-      assigneeEmoji: partial.assigneeEmoji ?? '🙂',
       dueDate: partial.dueDate,
       priority: partial.priority ?? 'med',
       durationMinutes: partial.durationMinutes,
       status: (partial.status as TaskStatus) ?? 'inactive',
       color: partial.color ?? '#E8D8A6',
+      iconEmoji: partial.iconEmoji,
+      textSize: partial.textSize,
+      subtasks: partial.subtasks,
+      recurrence: (partial as any).recurrence,
       createdAt: now(),
       updatedAt: now(),
       isActual: true,

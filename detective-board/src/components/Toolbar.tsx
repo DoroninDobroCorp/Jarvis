@@ -77,6 +77,7 @@ export const Toolbar: React.FC = () => {
       </div>
       <div className="tool-group">
         <Link to="/active" className="tool-link" title="Активные задачи" aria-label="Активные задачи">🔥 Активные</Link>
+        <Link to="/done" className="tool-link" style={{ marginLeft: 8 }} title="Выполненные задачи" aria-label="Выполненные задачи">✅ Выполненные</Link>
         <div style={{ marginLeft: 12 }}>
           <label style={{ color: 'var(--text)', marginRight: 6 }}>Допстраницы</label>
           <select aria-label="Допстраницы" onChange={(e) => { const v = e.target.value; if (v) { navigate(v); e.currentTarget.selectedIndex = 0; } }}>

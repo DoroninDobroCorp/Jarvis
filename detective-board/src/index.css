@@ -133,3 +133,14 @@ button.active {
 .badge--low { background: #324638; }
 .badge--med { background: #3d3a27; }
 .badge--high { background: #5a2a2a; }
+
+  /* Hide native calendar icon for custom recurrence arrow */
+  .date-no-icon {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: textfield;
+  }
+  .date-no-icon::-webkit-calendar-picker-indicator { display: none; opacity: 0; }
+  .date-no-icon::-webkit-inner-spin-button { display: none; }
+  .date-no-icon::-webkit-clear-button { display: none; }
+  .date-no-icon::-ms-clear { display: none; }

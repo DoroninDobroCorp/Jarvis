@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Group as KonvaGroup, Circle, Rect, Text, Image as KonvaImage, Arrow } from 'react-konva';
 import { useAppStore } from '../store';
-import type { AnyNode, GroupNode, TaskNode, PersonNode, TaskStatus } from '../types';
+import type { AnyNode, GroupNode, TaskNode, PersonNode, TaskStatus, Recurrence } from '../types';
 import { getLogger } from '../logger';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import type Konva from 'konva';
+import { computeNextDueDate, todayYMD, toIsoUTCFromYMD } from '../recurrence';
 
 function useWindowSize() {
   const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -111,7 +112,10 @@ function estimateTaskFont(text: string, base: number, contentW: number, contentH
 export const BoardCanvas: React.FC = () => {
   const nodes = useAppStore((s) => s.nodes);
   const currentParentId = useAppStore((s) => s.currentParentId);
-  const visibleNodes = useMemo(() => nodes.filter((n) => n.parentId === currentParentId), [nodes, currentParentId]);
+  const visibleNodes = useMemo(
+    () => nodes.filter((n) => n.parentId === currentParentId && !(n.type === 'task' && (n as TaskNode).status === 'done')),
+    [nodes, currentParentId]
+  );
   const links = useAppStore((s) => s.links);
   const viewport = useAppStore((s) => s.viewport);
   const setViewport = useAppStore((s) => s.setViewport);
@@ -151,6 +155,7 @@ export const BoardCanvas: React.FC = () => {
   const [linkCtxMenu, setLinkCtxMenu] = useState<{ x: number; y: number; linkId: string } | null>(null);
   const [ctxMenuPos, setCtxMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [linkCtxMenuPos, setLinkCtxMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [ctxRecOpen, setCtxRecOpen] = useState(false);
   const draggingMenuRef = useRef<{ kind: 'ctx' | 'link'; dx: number; dy: number } | null>(null);
   const [lasso, setLasso] = useState<null | { x: number; y: number; w: number; h: number; additive: boolean }>(null);
   const [hoveredStub, setHoveredStub] = useState<string | null>(null);
@@ -831,21 +836,39 @@ export const BoardCanvas: React.FC = () => {
     };
   }, [deleteSelection, setSelection, setLinkSelection, setEditingNodeId, editingNodeId, selection.length, linkSelection.length, undo, redo, setTool, log, tool, pendingLinkFrom]);
 
-  // Инициализация позиций контекстных меню при открытии
+  // Инициализация позиций контекстных меню при открытии — умное размещение относительно квадранта курсора
   useEffect(() => {
     if (ctxMenu) {
-      const left = Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 260));
-      const top = Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 200));
-      setCtxMenuPos({ x: left, y: top });
+      const pad = 8; const menuW = 360; const menuH = 240;
+      const onLeftHalf = ctxMenu.x < window.innerWidth / 2;
+      const onTopHalf = ctxMenu.y < window.innerHeight / 2;
+      const offsetX = onLeftHalf ? 12 : -menuW - 12; // слева — рисуем справа; справа — слева
+      const offsetY = onTopHalf ? 12 : -menuH - 12; // сверху — рисуем снизу; снизу — сверху
+      const rawX = ctxMenu.x + offsetX;
+      const rawY = ctxMenu.y + offsetY;
+      const x = Math.max(pad, Math.min(rawX, window.innerWidth - pad - menuW));
+      const y = Math.max(pad, Math.min(rawY, window.innerHeight - pad - menuH));
+      setCtxMenuPos({ x, y });
     } else {
       setCtxMenuPos(null);
     }
   }, [ctxMenu]);
+  // Сбрасываем панель повтора при смене узла/меню
+  useEffect(() => {
+    setCtxRecOpen(false);
+  }, [ctxMenu?.nodeId]);
   useEffect(() => {
     if (linkCtxMenu) {
-      const left = Math.max(8, Math.min(linkCtxMenu.x, window.innerWidth - 260));
-      const top = Math.max(8, Math.min(linkCtxMenu.y, window.innerHeight - 160));
-      setLinkCtxMenuPos({ x: left, y: top });
+      const pad = 8; const menuW = 320; const menuH = 200;
+      const onLeftHalf = linkCtxMenu.x < window.innerWidth / 2;
+      const onTopHalf = linkCtxMenu.y < window.innerHeight / 2;
+      const offsetX = onLeftHalf ? 12 : -menuW - 12;
+      const offsetY = onTopHalf ? 12 : -menuH - 12;
+      const rawX = linkCtxMenu.x + offsetX;
+      const rawY = linkCtxMenu.y + offsetY;
+      const x = Math.max(pad, Math.min(rawX, window.innerWidth - pad - menuW));
+      const y = Math.max(pad, Math.min(rawY, window.innerHeight - pad - menuH));
+      setLinkCtxMenuPos({ x, y });
     } else {
       setLinkCtxMenuPos(null);
     }
@@ -856,8 +879,10 @@ export const BoardCanvas: React.FC = () => {
     const onMove = (e: MouseEvent) => {
       const d = draggingMenuRef.current; if (!d) return;
       const x = e.clientX - d.dx; const y = e.clientY - d.dy;
-      const clampedX = Math.max(8, Math.min(x, window.innerWidth - 260));
-      const clampedY = Math.max(8, Math.min(y, window.innerHeight - 40));
+      const menuW = d.kind === 'ctx' ? 360 : 320;
+      const menuH = d.kind === 'ctx' ? 240 : 200;
+      const clampedX = Math.max(8, Math.min(x, window.innerWidth - menuW));
+      const clampedY = Math.max(8, Math.min(y, window.innerHeight - menuH));
       if (d.kind === 'ctx') setCtxMenuPos({ x: clampedX, y: clampedY });
       else setLinkCtxMenuPos({ x: clampedX, y: clampedY });
     };
@@ -1297,14 +1322,150 @@ export const BoardCanvas: React.FC = () => {
                 <input type="color" style={{ width: '100%' }} value={(ctxNode as TaskNode).color || '#E8D8A6'} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { color: e.target.value }); }} />
               </label>
               <label style={{ display: 'block', marginBottom: 6 }}>Дедлайн
-                <input type="date" style={{ width: '100%' }} value={(ctxNode as TaskNode).dueDate ? (ctxNode as TaskNode).dueDate!.slice(0,10) : ''} onChange={(e) => { const v = e.target.value ? new Date(e.target.value).toISOString() : undefined; void useAppStore.getState().updateNode(ctxNode.id, { dueDate: v }); }} />
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    type="date"
+                    style={{ flex: 1 }}
+                    className="date-no-icon"
+                    value={(ctxNode as TaskNode).dueDate ? (ctxNode as TaskNode).dueDate!.slice(0,10) : ''}
+                    onChange={(e) => {
+                      const v = e.target.value ? toIsoUTCFromYMD(e.target.value) : undefined;
+                      void useAppStore.getState().updateNode(ctxNode.id, { dueDate: v });
+                    }}
+                  />
+                  <button
+                    title="Повтор"
+                    style={{ padding: '6px 8px', background: '#333', color: '#fff', border: '1px solid #444', borderRadius: 4, cursor: 'pointer' }}
+                    onClick={() => setCtxRecOpen((v) => !v)}
+                  >▾</button>
+                </div>
               </label>
+              {ctxRecOpen ? (
+                <div style={{ margin: '6px 0', padding: 8, border: '1px solid #333', borderRadius: 6, background: '#1f1f1f', color: '#eee' }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                    <button style={{ padding: '4px 8px' }} onClick={() => {
+                      const rec = { kind: 'daily' } as const;
+                      const next = computeNextDueDate(rec, new Date());
+                      void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                    }}>Каждый день</button>
+                    <button style={{ padding: '4px 8px' }} onClick={() => {
+                      const rec = { kind: 'weekly', weekday: 4 } as const; // четверг
+                      const next = computeNextDueDate(rec, new Date());
+                      void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                    }}>Каждый четверг</button>
+                    <button style={{ padding: '4px 8px' }} onClick={() => {
+                      const rec = { kind: 'monthly', day: 28 } as const;
+                      const next = computeNextDueDate(rec, new Date());
+                      void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                    }}>Каждое 28-е</button>
+                    <button style={{ padding: '4px 8px' }} onClick={() => {
+                      const rec = { kind: 'interval', everyDays: 7, anchorDate: new Date().toISOString() } as const;
+                      const next = computeNextDueDate(rec, new Date());
+                      void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                    }}>Каждые 7 дней</button>
+                    <button style={{ padding: '4px 8px' }} onClick={() => {
+                      const rec = { kind: 'none' } as const;
+                      void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec });
+                    }}>Без повтора</button>
+                  </div>
+                  <fieldset className="inspector__fieldset" style={{ borderColor: '#333' }}>
+                    <legend style={{ fontSize: 12, color: '#aaa' }}>Произвольно</legend>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', alignItems: 'center', gap: 6 }}>
+                        <span>Еженедельно:</span>
+                        <select
+                          style={{ background: '#2a2a2a', color: '#fff', border: '1px solid #444', borderRadius: 4, padding: '4px 6px' }}
+                          value={(() => { const r = (ctxNode as TaskNode).recurrence as Recurrence | undefined; return r && r.kind === 'weekly' ? String(r.weekday) : ''; })()}
+                          onChange={(e) => {
+                            const w = Number(e.target.value);
+                            const rec = { kind: 'weekly', weekday: isNaN(w) ? 1 : w } as const;
+                            const next = computeNextDueDate(rec, new Date());
+                            void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                          }}
+                        >
+                          <option value="">— выбрать —</option>
+                          <option value={1}>Понедельник</option>
+                          <option value={2}>Вторник</option>
+                          <option value={3}>Среда</option>
+                          <option value={4}>Четверг</option>
+                          <option value={5}>Пятница</option>
+                          <option value={6}>Суббота</option>
+                          <option value={0}>Воскресенье</option>
+                        </select>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', alignItems: 'center', gap: 6 }}>
+                        <span>Ежемесячно:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={31}
+                          style={{ background: '#2a2a2a', color: '#fff', border: '1px solid #444', borderRadius: 4, padding: '4px 6px' }}
+                          value={(() => { const r = (ctxNode as TaskNode).recurrence as Recurrence | undefined; return r && r.kind === 'monthly' ? r.day : ''; })()}
+                          onChange={(e) => {
+                            const day = Math.max(1, Math.min(31, Number(e.target.value) || 1));
+                            const rec = { kind: 'monthly', day } as const;
+                            const next = computeNextDueDate(rec, new Date());
+                            void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                          }}
+                          placeholder="День месяца"
+                        />
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 1fr', alignItems: 'center', gap: 6 }}>
+                        <span>Интервал:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          style={{ background: '#2a2a2a', color: '#fff', border: '1px solid #444', borderRadius: 4, padding: '4px 6px' }}
+                          value={(() => { const r = (ctxNode as TaskNode).recurrence as Recurrence | undefined; return r && r.kind === 'interval' ? r.everyDays : ''; })()}
+                          onChange={(e) => {
+                            const n = Math.max(1, Number(e.target.value) || 1);
+                            const curr = (ctxNode as TaskNode).recurrence;
+                            const anchor = (curr && (curr as Recurrence).kind === 'interval') ? (curr as Extract<Recurrence, { kind: 'interval' }>).anchorDate : new Date().toISOString();
+                            const rec = { kind: 'interval', everyDays: n, anchorDate: anchor } as const;
+                            const next = computeNextDueDate(rec, new Date());
+                            void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                          }}
+                          placeholder="Каждые N дней"
+                        />
+                        <input
+                          type="date"
+                          style={{ background: '#2a2a2a', color: '#fff', border: '1px solid #444', borderRadius: 4, padding: '4px 6px' }}
+                          value={(() => { const r = (ctxNode as TaskNode).recurrence as Recurrence | undefined; return r && r.kind === 'interval' ? r.anchorDate.slice(0,10) : todayYMD(); })()}
+                          onChange={(e) => {
+                            const anchor = e.target.value ? toIsoUTCFromYMD(e.target.value) : new Date().toISOString();
+                            const curr = (ctxNode as TaskNode).recurrence as Recurrence | undefined;
+                            const n = curr && curr.kind === 'interval' ? curr.everyDays : 7;
+                            const rec = { kind: 'interval', everyDays: n, anchorDate: anchor } as const;
+                            const next = computeNextDueDate(rec, new Date());
+                            void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                          }}
+                          title="Начинать с"
+                        />
+                      </div>
+                    </div>
+                  </fieldset>
+                </div>
+              ) : null}
               <label style={{ display: 'block', marginBottom: 6 }}>Срочность
                 <select style={{ width: '100%' }} value={(ctxNode as TaskNode).priority || 'med'} onChange={(e) => { const val = e.target.value as 'low'|'med'|'high'; void useAppStore.getState().updateNode(ctxNode.id, { priority: val }); }}>
                   <option value="low">Низкая</option>
                   <option value="med">Средняя</option>
                   <option value="high">Высокая</option>
                 </select>
+              </label>
+              <label className="radio" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={(ctxNode as TaskNode).status === 'done'}
+                  onChange={(e) => {
+                    const done = e.target.checked;
+                    const patch: Partial<TaskNode> = done
+                      ? { status: 'done', completedAt: Date.now() }
+                      : { status: 'inactive', completedAt: undefined };
+                    void useAppStore.getState().updateNode(ctxNode.id, patch as any);
+                  }}
+                />
+                <span>Выполнено</span>
               </label>
               <label className="radio" style={{ marginBottom: 6 }}>
                 <input
@@ -1346,12 +1507,6 @@ export const BoardCanvas: React.FC = () => {
                   />
                 </label>
               </fieldset>
-              <label style={{ display: 'block', marginBottom: 6 }}>Исполнитель (имя)
-                <input style={{ width: '100%' }} value={(ctxNode as TaskNode).assigneeName || ''} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { assigneeName: e.target.value }); }} placeholder="Имя" />
-              </label>
-              <label style={{ display: 'block', marginBottom: 6 }}>Исполнитель (эмодзи)
-                <input style={{ width: '100%' }} value={(ctxNode as TaskNode).assigneeEmoji || ''} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { assigneeEmoji: e.target.value }); }} placeholder="🙂" />
-              </label>
               <label style={{ display: 'block', marginBottom: 6 }}>Статус
                 <select style={{ width: '100%' }} value={(ctxNode as TaskNode).status} onChange={(e) => { const val = e.target.value as TaskStatus; void useAppStore.getState().updateNode(ctxNode.id, { status: val }); }}>
                   <option value="active">Активная</option>

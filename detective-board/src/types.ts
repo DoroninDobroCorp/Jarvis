@@ -22,13 +22,18 @@ export interface BaseNode {
   isActual?: boolean; // default true; when false render at 50% opacity
 }
 
+// Recurrence rules for tasks
+export type Recurrence =
+  | { kind: 'none' }
+  | { kind: 'daily' }
+  | { kind: 'weekly'; weekday: number } // 0 (Sunday) .. 6 (Saturday)
+  | { kind: 'monthly'; day: number } // 1..31 (will clamp to end of month)
+  | { kind: 'interval'; everyDays: number; anchorDate: string }; // ISO date string (YYYY-MM-DD or full ISO)
+
 export interface TaskNode extends BaseNode {
   type: 'task';
   title: string;
   description?: string;
-  assigneeId?: string;
-  assigneeEmoji?: string; // simple emoji avatar
-  assigneeName?: string; // display name of assignee
   iconEmoji?: string; // optional decorative emoji for the task itself
   dueDate?: string; // ISO string
   priority?: 'low' | 'med' | 'high';
@@ -36,6 +41,9 @@ export interface TaskNode extends BaseNode {
   status: TaskStatus;
   color?: string; // sticky note color
   textSize?: number; // manual override for task text font size
+  subtasks?: Subtask[]; // optional subtasks (not rendered on board, only in menus/pages)
+  completedAt?: number; // timestamp when task was marked done
+  recurrence?: Recurrence; // optional recurrence rule for auto-updating dueDate
 }
 
 export interface GroupNode extends BaseNode {
@@ -63,6 +71,13 @@ export interface PersonNode extends BaseNode {
 }
 
 export type AnyNode = TaskNode | GroupNode | PersonNode;
+
+export interface Subtask {
+  id: string;
+  title: string;
+  done?: boolean;
+  createdAt?: number;
+}
 
 export interface LinkThread {
   id: string;

@@ -10,6 +10,7 @@ import { BooksPage } from './pages/BooksPage';
 import { MoviesPage } from './pages/MoviesPage';
 import { getLogger } from './logger';
 import { DiagPage } from './pages/DiagPage';
+import { CompletedTasksPage } from './pages/CompletedTasksPage';
 
 function BoardPage() {
   return (
@@ -26,6 +27,14 @@ function App() {
   const init = useAppStore((s) => s.init);
   const log = getLogger('App');
   useEffect(() => {
+    // Expose store for e2e tests (dev only)
+    try {
+      if (import.meta.env.DEV) {
+        (window as any).__appStore = useAppStore;
+      }
+    } catch {}
+  }, []);
+  useEffect(() => {
     if (!initialized) {
       log.info('init:request');
       void init();
@@ -39,6 +48,7 @@ function App() {
     <Routes>
       <Route path="/" element={<BoardPage />} />
       <Route path="/active" element={<ActiveTasksPage />} />
+      <Route path="/done" element={<CompletedTasksPage />} />
       <Route path="/books" element={<BooksPage />} />
       <Route path="/movies" element={<MoviesPage />} />
       <Route path="/diag" element={<DiagPage />} />
