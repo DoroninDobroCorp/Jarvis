@@ -108,14 +108,6 @@ function estimateTaskFont(text: string, base: number, contentW: number, contentH
   return s;
 }
 
-// Fit single-line title into a given width by shrinking font size (keeps ellipsis as a fallback)
-function fitTitleFontSingleLine(text: string, base: number, width: number) {
-  const len = (text || '').length;
-  if (len === 0) return base;
-  const approxMax = width / (0.6 * len);
-  return clamp(Math.floor(Math.min(base, approxMax)), 10, 64);
-}
-
 export const BoardCanvas: React.FC = () => {
   const nodes = useAppStore((s) => s.nodes);
   const currentParentId = useAppStore((s) => s.currentParentId);
@@ -161,6 +153,11 @@ export const BoardCanvas: React.FC = () => {
   const [hoveredStub, setHoveredStub] = useState<string | null>(null);
   const [hoveredLink, setHoveredLink] = useState<string | null>(null);
   const didAutoCenter = useRef<boolean>(false);
+  // Поиск целевого узла для связи (после выбора первого узла и нажатия A/Ф)
+  const [linkSearchOpen, setLinkSearchOpen] = useState(false);
+  const [linkSearchTerm, setLinkSearchTerm] = useState('');
+  const [linkSearchIndex, setLinkSearchIndex] = useState(0);
+  const linkSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Поиск свободного места на уровне (newParentId) рядом с базовой точкой
   const findFreeSpot = useCallback((baseX: number, baseY: number, w: number, h: number, newParentId: string | null): { x: number; y: number } => {
@@ -252,7 +249,7 @@ export const BoardCanvas: React.FC = () => {
 
   const ctxNode = useMemo(() => (ctxMenu ? nodes.find((n) => n.id === ctxMenu.nodeId) : null), [ctxMenu, nodes]);
 
-  // HUD-подсказка для связей рядом с курсором
+  // HUD-подсказка рядом с курсором: используется для связей и для узлов
   const [hoverHUD, setHoverHUD] = useState<{ x: number; y: number; text: string } | null>(null);
   const showLinkHud = useMemo(() => tool === 'link', [tool]);
 
@@ -539,6 +536,40 @@ export const BoardCanvas: React.FC = () => {
     return list;
   }, [links, projectToLevel, diag, log]);
 
+  // Результаты поиска узла-назначения при создании связи
+  const linkSearchResults = useMemo(() => {
+    if (!linkSearchOpen) return [] as AnyNode[];
+    const q = linkSearchTerm.trim().toLowerCase();
+    const arr = nodes.filter((n) => n.id !== pendingLinkFrom).filter((n) => {
+      if (!q) return true;
+      const label = nodeDisplayName(n).toLowerCase();
+      return label.includes(q);
+    });
+    return arr.slice(0, 200);
+  }, [linkSearchOpen, linkSearchTerm, nodes, pendingLinkFrom]);
+
+  const chooseLinkTarget = useCallback((targetId: string) => {
+    const from = pendingLinkFrom;
+    if (!from || from === targetId) {
+      setLinkSearchOpen(false);
+      return;
+    }
+    void addLink(from, targetId);
+    setPendingLinkFrom(null);
+    setSelection([]);
+    setLinkSearchOpen(false);
+    setLinkSearchTerm('');
+    log.info('link:connect:search', { from, to: targetId });
+  }, [pendingLinkFrom, addLink, setSelection, log]);
+
+  // Фокус в поле поиска, когда открываем палитру
+  useEffect(() => {
+    if (linkSearchOpen) {
+      setTimeout(() => { linkSearchInputRef.current?.focus(); }, 0);
+      setLinkSearchIndex(0);
+    }
+  }, [linkSearchOpen]);
+
   // Performance mode: упрощаем отрисовку при больших графах или сильном отдалении
   const basePerf = useMemo(() => (
     visibleNodes.length > 300 || links.length > 600 || viewport.scale < 0.35
@@ -727,27 +758,28 @@ export const BoardCanvas: React.FC = () => {
     });
   }, [moveNode, reparentOne]);
 
-  // Keyboard shortcuts: F — тумблер режима связей, T/G/E/R/B — инструменты добавления
+  // Keyboard shortcuts: F/А — тумблер режима связей, T/Е G/П E/У R/К B/И — инструменты добавления
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
       if (typing) return;
       if (editingNodeId) return;
+      const keyLower = e.key.toLowerCase(); // поддержка русской раскладки
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         if (selection.length === 0 && linkSelection.length === 0) return;
         const ok = window.confirm('Удалить выбранное?');
         if (!ok) return;
         void deleteSelection();
-      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+      } else if ((e.metaKey || e.ctrlKey) && (keyLower === 'z' || keyLower === 'я')) {
         e.preventDefault();
         if (e.shiftKey) {
           void redo();
         } else {
           void undo();
         }
-      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || e.key === 'Y')) {
+      } else if ((e.metaKey || e.ctrlKey) && (keyLower === 'y' || keyLower === 'н')) {
         e.preventDefault();
         void redo();
       } else if (e.key === 'Escape') {
@@ -756,28 +788,33 @@ export const BoardCanvas: React.FC = () => {
         setEditingNodeId(null);
         setCtxMenu(null);
         setLinkCtxMenu(null);
-      } else if (e.key === 'f' || e.key === 'F') {
+        setLinkSearchOpen(false);
+      } else if (keyLower === 'f' || keyLower === 'а') {
         const now = useAppStore.getState().tool;
         const next = now === 'link' ? 'none' : 'link';
         setTool(next);
         if (next !== 'link') setPendingLinkFrom(null);
         log.debug('hotkey:F:toggle', { from: now, to: next });
+      } else if (tool === 'link' && pendingLinkFrom && (keyLower === 'a' || keyLower === 'ф')) {
+        // Открыть палитру выбора целевого узла
+        e.preventDefault();
+        setLinkSearchOpen(true);
+        setLinkSearchTerm('');
       } else {
-        // Добавление: T/G/E/R/B — тумблер инструментов
-        const k = e.key.toLowerCase();
-        const map: Record<string, typeof tool> = {
-          't': 'add-task',
-          'g': 'add-group',
-          'e': 'add-person-employee',
-          'r': 'add-person-partner',
-          'b': 'add-person-bot',
+        // Добавление: T/G/E/R/B и русские аналоги Е/П/У/К/И — тумблер инструментов
+        const mapRU: Record<string, typeof tool> = {
+          't': 'add-task', 'е': 'add-task', // T -> русская Е
+          'g': 'add-group', 'п': 'add-group', // G -> русская П
+          'e': 'add-person-employee', 'у': 'add-person-employee', // E -> русская У
+          'r': 'add-person-partner', 'к': 'add-person-partner', // R -> русская К
+          'b': 'add-person-bot', 'и': 'add-person-bot', // B -> русская И
         } as const;
-        if (k in map) {
-          const desired = map[k];
+        if (keyLower in mapRU) {
+          const desired = mapRU[keyLower];
           const now = useAppStore.getState().tool;
           const next = now === desired ? 'none' : desired;
           setTool(next);
-          log.debug('hotkey:add:toggle', { key: k, from: now, to: next });
+          log.debug('hotkey:add:toggle', { key: keyLower, from: now, to: next });
         }
       }
     };
@@ -785,7 +822,15 @@ export const BoardCanvas: React.FC = () => {
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [deleteSelection, setSelection, setLinkSelection, setEditingNodeId, editingNodeId, selection.length, linkSelection.length, undo, redo, setTool, log]);
+  }, [deleteSelection, setSelection, setLinkSelection, setEditingNodeId, editingNodeId, selection.length, linkSelection.length, undo, redo, setTool, log, tool, pendingLinkFrom]);
+
+  // Обновление индекса выделения в результатах поиска при изменении списка
+  useEffect(() => {
+    if (!linkSearchOpen) return;
+    // Сбрасываем или ограничиваем индекс
+    const max = Math.max(0, linkSearchResults.length - 1);
+    setLinkSearchIndex((i) => Math.min(Math.max(0, i), max));
+  }, [linkSearchOpen, linkSearchResults.length]);
 
   // Inline editor overlay
   const editingNode = useMemo(() => nodes.find((n) => n.id === editingNodeId), [nodes, editingNodeId]);
@@ -1080,11 +1125,73 @@ export const BoardCanvas: React.FC = () => {
                 setSelection([n.id]);
                 setCtxMenu({ x: e.evt.clientX, y: e.evt.clientY, nodeId: n.id });
               }}
+              onHoverEnter={(ev) => {
+                const label = n.type === 'task' ? (n as TaskNode).title : n.type === 'person' ? (n as PersonNode).name : (n as GroupNode).name;
+                setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: label || '' });
+              }}
+              onHoverMove={(ev) => {
+                setHoverHUD((prev) => (prev ? { ...prev, x: ev.evt.clientX, y: ev.evt.clientY } : prev));
+              }}
+              onHoverLeave={() => setHoverHUD((prev) => (prev ? null : prev))}
             />
           ))}
           </KonvaGroup>
         </Layer>
       </Stage>
+      {linkSearchOpen ? (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 2000, display: 'grid', placeItems: 'center' }}
+          onClick={() => setLinkSearchOpen(false)}
+        >
+          <div
+            style={{ width: 'min(720px, 96vw)', maxHeight: '80vh', background: '#1f1f1f', color: '#fff', padding: 12, borderRadius: 8, boxShadow: '0 10px 36px rgba(0,0,0,0.45)', overflow: 'hidden' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ opacity: 0.8 }}>Куда связать:</span>
+              <input
+                ref={linkSearchInputRef}
+                value={linkSearchTerm}
+                onChange={(e) => { setLinkSearchTerm(e.target.value); setLinkSearchIndex(0); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setLinkSearchIndex((i) => Math.min(i + 1, Math.max(0, linkSearchResults.length - 1))); }
+                  else if (e.key === 'ArrowUp') { e.preventDefault(); setLinkSearchIndex((i) => Math.max(i - 1, 0)); }
+                  else if (e.key === 'Enter') { const item = linkSearchResults[linkSearchIndex]; if (item) chooseLinkTarget(item.id); }
+                  else if (e.key === 'Escape') { setLinkSearchOpen(false); }
+                }}
+                placeholder="Введите название..."
+                style={{ flex: 1, padding: '8px 10px', borderRadius: 6, border: '1px solid #3a3a3a', background: '#2a2a2a', color: '#fff' }}
+              />
+            </div>
+            <div style={{ maxHeight: '60vh', overflowY: 'auto', borderTop: '1px solid #333' }}>
+              {linkSearchResults.length === 0 ? (
+                <div style={{ padding: 10, color: '#bbb' }}>Ничего не найдено</div>
+              ) : (
+                linkSearchResults.map((n, idx) => {
+                  const label = nodeDisplayName(n);
+                  const type = n.type === 'task' ? 'Задача' : n.type === 'group' ? 'Группа' : 'Человек';
+                  const icon = n.type === 'task' ? '📝' : n.type === 'group' ? '🟢' : '👤';
+                  const active = idx === linkSearchIndex;
+                  return (
+                    <div
+                      key={n.id}
+                      onClick={() => chooseLinkTarget(n.id)}
+                      onMouseEnter={() => setLinkSearchIndex(idx)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', cursor: 'pointer', background: active ? '#2f2f2f' : 'transparent' }}
+                    >
+                      <span style={{ width: 20, textAlign: 'center' }}>{icon}</span>
+                      <div style={{ display: 'grid' }}>
+                        <div style={{ fontWeight: 600, color: '#fff' }}>{label}</div>
+                        <div style={{ fontSize: 12, color: '#aaa' }}>{type} • {n.id.slice(0, 8)}</div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
       {ctxMenu && ctxNode ? (
         <div
           style={{ position: 'fixed', left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 360)), top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 480)), background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 240, maxHeight: Math.max(240, window.innerHeight - 16), overflowY: 'auto', boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
@@ -1301,8 +1408,8 @@ export const BoardCanvas: React.FC = () => {
           </div>
         </div>
       ) : null}
-      {/* HUD-подсказка для связей: фиксированный размер рядом с курсором */}
-      {hoverHUD && showLinkHud ? (
+      {/* HUD-подсказка: фиксированный размер рядом с курсором */}
+      {hoverHUD ? (
         <div style={{ position: 'fixed', left: hoverHUD.x + 12, top: hoverHUD.y + 12, background: '#fff', color: '#111', padding: '2px 6px', borderRadius: 4, boxShadow: '0 2px 10px rgba(0,0,0,0.2)', fontSize: 13, pointerEvents: 'none', zIndex: 1002 }}>
           {hoverHUD.text}
         </div>
@@ -1362,7 +1469,10 @@ const NodeShape: React.FC<{
   onClick: (e: KonvaEventObject<MouseEvent>) => void;
   onDblClick: () => void;
   onContextMenu: (e: KonvaEventObject<PointerEvent>) => void;
-}> = ({ node, selected, onDragStart, onDragMove, onDragEnd, onClick, onDblClick, onContextMenu }) => {
+  onHoverEnter?: (e: KonvaEventObject<MouseEvent>) => void;
+  onHoverMove?: (e: KonvaEventObject<MouseEvent>) => void;
+  onHoverLeave?: () => void;
+}> = ({ node, selected, onDragStart, onDragMove, onDragEnd, onClick, onDblClick, onContextMenu, onHoverEnter, onHoverMove, onHoverLeave }) => {
   const isTask = node.type === 'task';
   const isGroup = node.type === 'group';
   const isPerson = node.type === 'person';
@@ -1393,6 +1503,9 @@ const NodeShape: React.FC<{
         onDblClick={() => onDblClick()}
         onDblTap={() => onDblClick()}
         onContextMenu={onContextMenu}
+        onMouseEnter={(e) => { onHoverEnter?.(e as unknown as KonvaEventObject<MouseEvent>); }}
+        onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
+        onMouseLeave={() => { onHoverLeave?.(); }}
       >
         <Rect
           width={t.width}
@@ -1467,8 +1580,11 @@ const NodeShape: React.FC<{
     const g = node as GroupNode;
     const r = Math.min(g.width, g.height) / 2;
     const baseGroup = clamp(r / 1.6, 12, 64);
-    const titleWidth = Math.max(0, g.width - 16);
-    const groupFs = typeof g.titleSize === 'number' ? g.titleSize : fitTitleFontSingleLine(g.name, baseGroup, titleWidth);
+    const d = Math.min(g.width, g.height);
+    const pad = Math.max(8, Math.round(d * 0.12));
+    const contentW = Math.max(0, d - pad * 2);
+    const contentH = Math.max(0, d - pad * 2);
+    const groupFs = typeof g.titleSize === 'number' ? g.titleSize : estimateTaskFont(g.name, baseGroup, contentW, contentH, 1.1);
     const hasActive = groupHasActive(g.id);
     return (
       <KonvaGroup
@@ -1483,6 +1599,9 @@ const NodeShape: React.FC<{
         onDblClick={() => onDblClick()}
         onDblTap={() => onDblClick()}
         onContextMenu={onContextMenu}
+        onMouseEnter={(e) => { onHoverEnter?.(e as unknown as KonvaEventObject<MouseEvent>); }}
+        onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
+        onMouseLeave={() => { onHoverLeave?.(); }}
       >
         <Circle
           radius={r}
@@ -1494,8 +1613,22 @@ const NodeShape: React.FC<{
           stroke={'#00000040'}
           strokeWidth={1}
         />
-        {/* title */}
-        <Text x={8} y={r - groupFs / 2} width={titleWidth} align="center" text={g.name} fontSize={groupFs} fill={'#2B1F1F'} fontStyle="bold" wrap="none" ellipsis />
+        {/* title (wrapped, centered inside inner box) */}
+        <KonvaGroup x={r - contentW / 2} y={r - contentH / 2} clip={{ x: 0, y: 0, width: contentW, height: contentH }}>
+          <Text
+            x={0}
+            y={0}
+            width={contentW}
+            height={contentH}
+            text={g.name}
+            fontSize={groupFs}
+            fill={'#2B1F1F'}
+            fontStyle="bold"
+            align="center"
+            verticalAlign="middle"
+            wrap="word"
+          />
+        </KonvaGroup>
         {/* active indicator */}
         {hasActive ? (
           <Circle x={g.width - 12} y={12} radius={6} fill={'#FF6B6B'} shadowBlur={8} />
@@ -1552,6 +1685,9 @@ const NodeShape: React.FC<{
         onDblClick={() => onDblClick()}
         onDblTap={() => onDblClick()}
         onContextMenu={onContextMenu}
+        onMouseEnter={(e) => { onHoverEnter?.(e as unknown as KonvaEventObject<MouseEvent>); }}
+        onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
+        onMouseLeave={() => { onHoverLeave?.(); }}
       >
         {/* avatar background circle */}
         <Circle
