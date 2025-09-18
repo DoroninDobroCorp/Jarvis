@@ -10,14 +10,25 @@ export const ActiveTasksPage: React.FC = () => {
   const navigate = useNavigate();
   const log = getLogger('ActiveTasks');
 
-  const activeTasks = useMemo(() =>
-    nodes.filter((n): n is TaskNode => n.type === 'task' && (n.status === 'in_progress' || n.status === 'active'))
+  const activeTasks = useMemo(() => {
+    const prioRank = (p: TaskNode['priority'] | undefined) => (
+      p === 'high' ? 0 : p === 'med' ? 1 : p === 'low' ? 2 : 3
+    );
+    return nodes
+      .filter((n): n is TaskNode => n.type === 'task' && (n.status === 'in_progress' || n.status === 'active'))
+      .slice()
       .sort((a, b) => {
         const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
         const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
-        return ad - bd;
-      })
-  , [nodes]);
+        if (ad !== bd) return ad - bd; // раньше срок — выше
+        // одинаковая дата: по важности (high > med > low)
+        const ap = prioRank(a.priority);
+        const bp = prioRank(b.priority);
+        if (ap !== bp) return ap - bp;
+        // стабилизируем по названию, чтобы порядок был предсказуем
+        return (a.title || '').localeCompare(b.title || '');
+      });
+  }, [nodes]);
 
   useEffect(() => {
     log.info('activeTasks:update', { count: activeTasks.length });

@@ -149,6 +149,9 @@ export const BoardCanvas: React.FC = () => {
   const [pendingLinkFrom, setPendingLinkFrom] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
   const [linkCtxMenu, setLinkCtxMenu] = useState<{ x: number; y: number; linkId: string } | null>(null);
+  const [ctxMenuPos, setCtxMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [linkCtxMenuPos, setLinkCtxMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const draggingMenuRef = useRef<{ kind: 'ctx' | 'link'; dx: number; dy: number } | null>(null);
   const [lasso, setLasso] = useState<null | { x: number; y: number; w: number; h: number; additive: boolean }>(null);
   const [hoveredStub, setHoveredStub] = useState<string | null>(null);
   const [hoveredLink, setHoveredLink] = useState<string | null>(null);
@@ -251,7 +254,8 @@ export const BoardCanvas: React.FC = () => {
 
   // HUD-подсказка рядом с курсором: используется для связей и для узлов
   const [hoverHUD, setHoverHUD] = useState<{ x: number; y: number; text: string } | null>(null);
-  const showLinkHud = useMemo(() => tool === 'link', [tool]);
+  // Раньше показывали HUD только в режиме 'link'. По просьбе — включаем всегда.
+  const showLinkHud = true;
 
   // Безрыжковое центрирование: вычисляем целевые x/y для уровня и используем их сразу на первом кадре
   const lastLevelRef = useRef<string | '__INIT__' | null>('__INIT__');
@@ -487,12 +491,15 @@ export const BoardCanvas: React.FC = () => {
     }
   }, [tool, pendingLinkFrom, addLink, setSelection, selection, log]);
 
-  const handleNodeDblClick = useCallback((node: AnyNode) => {
+  const handleNodeDblClick = useCallback((node: AnyNode, ev?: KonvaEventObject<MouseEvent>) => {
     if (node.type === 'group') {
       enterGroup(node.id);
       log.info('group:enter', { id: node.id });
     } else if (node.type === 'task' || node.type === 'person') {
       setEditingNodeId(node.id);
+      const ex = (ev as any)?.evt?.clientX;
+      const ey = (ev as any)?.evt?.clientY;
+      if (typeof ex === 'number' && typeof ey === 'number') setEditorClientPos({ x: ex, y: ey });
       log.info('edit:start', { id: node.id, type: node.type });
     }
   }, [enterGroup, setEditingNodeId, log]);
@@ -824,6 +831,45 @@ export const BoardCanvas: React.FC = () => {
     };
   }, [deleteSelection, setSelection, setLinkSelection, setEditingNodeId, editingNodeId, selection.length, linkSelection.length, undo, redo, setTool, log, tool, pendingLinkFrom]);
 
+  // Инициализация позиций контекстных меню при открытии
+  useEffect(() => {
+    if (ctxMenu) {
+      const left = Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 260));
+      const top = Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 200));
+      setCtxMenuPos({ x: left, y: top });
+    } else {
+      setCtxMenuPos(null);
+    }
+  }, [ctxMenu]);
+  useEffect(() => {
+    if (linkCtxMenu) {
+      const left = Math.max(8, Math.min(linkCtxMenu.x, window.innerWidth - 260));
+      const top = Math.max(8, Math.min(linkCtxMenu.y, window.innerHeight - 160));
+      setLinkCtxMenuPos({ x: left, y: top });
+    } else {
+      setLinkCtxMenuPos(null);
+    }
+  }, [linkCtxMenu]);
+
+  // Глобальные обработчики перетаскивания меню
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = draggingMenuRef.current; if (!d) return;
+      const x = e.clientX - d.dx; const y = e.clientY - d.dy;
+      const clampedX = Math.max(8, Math.min(x, window.innerWidth - 260));
+      const clampedY = Math.max(8, Math.min(y, window.innerHeight - 40));
+      if (d.kind === 'ctx') setCtxMenuPos({ x: clampedX, y: clampedY });
+      else setLinkCtxMenuPos({ x: clampedX, y: clampedY });
+    };
+    const onUp = () => { draggingMenuRef.current = null; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
   // Обновление индекса выделения в результатах поиска при изменении списка
   useEffect(() => {
     if (!linkSearchOpen) return;
@@ -835,6 +881,7 @@ export const BoardCanvas: React.FC = () => {
   // Inline editor overlay
   const editingNode = useMemo(() => nodes.find((n) => n.id === editingNodeId), [nodes, editingNodeId]);
   const [editValue, setEditValue] = useState('');
+  const [editorClientPos, setEditorClientPos] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     if (editingNode) {
       if (editingNode.type === 'task') {
@@ -866,14 +913,32 @@ export const BoardCanvas: React.FC = () => {
 
   const editorStyle = useMemo(() => {
     if (!editingNode) return undefined;
-    // учитываем смещение родительской группы
+    // Если известна позиция курсора при двойном клике — используем её
+    if (editorClientPos) {
+      const w = Math.max(80, Math.min(600, editingNode.width * viewport.scale - 24));
+      return {
+        position: 'fixed' as const,
+        left: `${editorClientPos.x + 8}px`,
+        top: `${editorClientPos.y + 8}px`,
+        width: `${w}px`,
+        zIndex: 1000,
+      };
+    }
+    // иначе — позиционируем по мировым координатам узла, учитывая всех предков-групп
     let baseX = editingNode.x;
     let baseY = editingNode.y;
     if (editingNode.parentId) {
-      const parent = nodes.find((n) => n.id === editingNode.parentId && n.type === 'group') as GroupNode | undefined;
-      if (parent) {
-        baseX += parent.x;
-        baseY += parent.y;
+      const visited = new Set<string>();
+      let p: string | null | undefined = editingNode.parentId;
+      let hops = 0;
+      while (p && !visited.has(p) && hops < 1000) {
+        visited.add(p);
+        const pg = nodes.find((n) => n.id === p && n.type === 'group') as GroupNode | undefined;
+        if (!pg) break;
+        baseX += pg.x;
+        baseY += pg.y;
+        p = pg.parentId ?? null;
+        hops++;
       }
     }
     const screenX = baseX * viewport.scale + viewport.x + 12;
@@ -886,7 +951,12 @@ export const BoardCanvas: React.FC = () => {
       width: `${w}px`,
       zIndex: 1000,
     };
-  }, [editingNode, viewport, nodes]);
+  }, [editingNode, viewport, nodes, editorClientPos]);
+
+  // Сбрасываем позицию редактора при закрытии
+  useEffect(() => {
+    if (!editingNode) setEditorClientPos(null);
+  }, [editingNode]);
 
   return (
     <div className="board-canvas" style={{ position: 'fixed', inset: 0 }}>
@@ -1081,7 +1151,6 @@ export const BoardCanvas: React.FC = () => {
               // якорим старт по границе видимого узла в сторону скрытого
               const start = computeAnchorTowardsPoint(visibleNode, hLocal);
               const ex = start.x + ux * 60; const ey = start.y + uy * 60; // 60px штрих
-              const label = nodeDisplayName(hiddenNode);
               list.push(
                 <React.Fragment key={`stub-${l.id}`}>
                   {/* стрелочка усеченная: направление с учетом ориентации */}
@@ -1097,8 +1166,19 @@ export const BoardCanvas: React.FC = () => {
                         perfectDrawEnabled={false}
                         shadowColor={perfMode ? undefined : '#00000080'} shadowBlur={perfMode ? 0 : 6}
                         hitStrokeWidth={40}
-                        onMouseEnter={(ev) => { setHoveredStub(l.id); if (showLinkHud) setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: `${(l.dir||'one')==='both' ? '↔' : '→'} ${label}` }); }}
-                        onMouseMove={(ev) => { if (showLinkHud && hoveredStub === l.id) setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: `${(l.dir||'one')==='both' ? '↔' : '→'} ${label}` }); }}
+                        onMouseEnter={(ev) => {
+                          setHoveredStub(l.id);
+                          if (showLinkHud) {
+                            const arrow = (l.dir || 'one') === 'both' ? '↔' : '→';
+                            setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: `${nodeDisplayName(a)} ${arrow} ${nodeDisplayName(b)}` });
+                          }
+                        }}
+                        onMouseMove={(ev) => {
+                          if (showLinkHud && hoveredStub === l.id) {
+                            const arrow = (l.dir || 'one') === 'both' ? '↔' : '→';
+                            setHoverHUD({ x: ev.evt.clientX, y: ev.evt.clientY, text: `${nodeDisplayName(a)} ${arrow} ${nodeDisplayName(b)}` });
+                          }
+                        }}
                         onMouseLeave={() => { setHoveredStub((p) => (p === l.id ? null : p)); setHoverHUD(null); }} />
                     );
                   })()}
@@ -1119,7 +1199,7 @@ export const BoardCanvas: React.FC = () => {
               onDragMove={(e) => handleNodeDragMove(n.id, e)}
               onDragEnd={(e) => handleNodeDragEnd(n, e)}
               onClick={(e) => { handleNodeClick(n.id, e); }}
-              onDblClick={() => handleNodeDblClick(n)}
+              onDblClick={(e) => handleNodeDblClick(n, e as unknown as KonvaEventObject<MouseEvent>)}
               onContextMenu={(e) => {
                 e.evt.preventDefault();
                 setSelection([n.id]);
@@ -1194,18 +1274,27 @@ export const BoardCanvas: React.FC = () => {
       ) : null}
       {ctxMenu && ctxNode ? (
         <div
-          style={{ position: 'fixed', left: Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 360)), top: Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 480)), background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 240, maxHeight: Math.max(240, window.innerHeight - 16), overflowY: 'auto', boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
+          style={{ position: 'fixed', left: (ctxMenuPos?.x ?? Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 360))), top: (ctxMenuPos?.y ?? Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 16 - 240))), background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 240, maxHeight: Math.max(240, window.innerHeight - 16), overflowY: 'auto', boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
+          <div
+            style={{ cursor: 'move', fontWeight: 600, margin: '-4px -4px 6px -4px', padding: '4px 6px', background: '#2a2a2a', borderRadius: 4 }}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); const cx = (ctxMenuPos?.x ?? Math.max(8, Math.min(ctxMenu.x, window.innerWidth - 360))); const cy = (ctxMenuPos?.y ?? Math.max(8, Math.min(ctxMenu.y, window.innerHeight - 16 - 240))); draggingMenuRef.current = { kind: 'ctx', dx: e.clientX - cx, dy: e.clientY - cy }; }}
+          >
+            Настройки
+          </div>
           {ctxNode.type === 'task' ? (
             <div>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Задача</div>
+              <label style={{ display: 'block', marginBottom: 6 }}>Заголовок
+                <input style={{ width: '100%' }} value={(ctxNode as TaskNode).title} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { title: e.target.value }); }} placeholder="Название задачи" />
+              </label>
+              <label style={{ display: 'block', marginBottom: 6 }}>Описание
+                <textarea style={{ width: '100%', minHeight: 60 }} value={(ctxNode as TaskNode).description || ''} onChange={(e) => { const v = e.target.value || undefined; void useAppStore.getState().updateNode(ctxNode.id, { description: v }); }} placeholder="Описание (необязательно)" />
+              </label>
               <label style={{ display: 'block', marginBottom: 6 }}>Цвет
                 <input type="color" style={{ width: '100%' }} value={(ctxNode as TaskNode).color || '#E8D8A6'} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { color: e.target.value }); }} />
-              </label>
-              <label style={{ display: 'block', marginBottom: 6 }}>Смайлик
-                <input style={{ width: '100%' }} value={(ctxNode as TaskNode).iconEmoji || ''} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { iconEmoji: e.target.value }); }} placeholder="🧩" />
               </label>
               <label style={{ display: 'block', marginBottom: 6 }}>Дедлайн
                 <input type="date" style={{ width: '100%' }} value={(ctxNode as TaskNode).dueDate ? (ctxNode as TaskNode).dueDate!.slice(0,10) : ''} onChange={(e) => { const v = e.target.value ? new Date(e.target.value).toISOString() : undefined; void useAppStore.getState().updateNode(ctxNode.id, { dueDate: v }); }} />
@@ -1357,6 +1446,9 @@ export const BoardCanvas: React.FC = () => {
           ) : ctxNode.type === 'person' ? (
             <div style={{ marginTop: 8 }}>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Контакты</div>
+              <label style={{ display: 'block', marginBottom: 4 }}>Имя
+                <input style={{ width: '100%' }} value={(ctxNode as PersonNode).name || ''} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { name: e.target.value }); }} placeholder="Имя" />
+              </label>
               <label style={{ display: 'block', marginBottom: 4 }}>Email
                 <input style={{ width: '100%' }} value={(ctxNode as PersonNode).contacts?.email || ''} onChange={(e) => { void useAppStore.getState().updateNode(ctxNode.id, { contacts: { ...(ctxNode as PersonNode).contacts, email: e.target.value } }); }} />
               </label>
@@ -1416,10 +1508,16 @@ export const BoardCanvas: React.FC = () => {
       ) : null}
       {linkCtxMenu ? (
         <div
-          style={{ position: 'fixed', left: Math.max(8, Math.min(linkCtxMenu.x, window.innerWidth - 360)), top: Math.max(8, Math.min(linkCtxMenu.y, window.innerHeight - 320)), background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 240, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
+          style={{ position: 'fixed', left: (linkCtxMenuPos?.x ?? Math.max(8, Math.min(linkCtxMenu.x, window.innerWidth - 360))), top: (linkCtxMenuPos?.y ?? Math.max(8, Math.min(linkCtxMenu.y, window.innerHeight - 320))), background: '#222', color: '#fff', padding: 8, borderRadius: 6, zIndex: 1001, minWidth: 240, maxHeight: Math.max(200, window.innerHeight - 16), overflowY: 'auto', boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
+          <div
+            style={{ cursor: 'move', fontWeight: 600, margin: '-4px -4px 6px -4px', padding: '4px 6px', background: '#2a2a2a', borderRadius: 4 }}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); const cx = (linkCtxMenuPos?.x ?? Math.max(8, Math.min(linkCtxMenu.x, window.innerWidth - 360))); const cy = (linkCtxMenuPos?.y ?? Math.max(8, Math.min(linkCtxMenu.y, window.innerHeight - 320))); draggingMenuRef.current = { kind: 'link', dx: e.clientX - cx, dy: e.clientY - cy }; }}
+          >
+            Связь
+          </div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Связь</div>
           <label style={{ display: 'block', marginBottom: 6 }}>Цвет
             <input type="color" style={{ width: '100%' }} value={(useAppStore.getState().links.find((l) => l.id === linkCtxMenu.linkId)?.color) || '#C94545'} onChange={(e) => { void useAppStore.getState().updateLink(linkCtxMenu.linkId, { color: e.target.value }); }} />
@@ -1467,7 +1565,7 @@ const NodeShape: React.FC<{
   onDragMove: (e: KonvaEventObject<DragEvent>) => void;
   onDragEnd: (e: KonvaEventObject<DragEvent>) => void;
   onClick: (e: KonvaEventObject<MouseEvent>) => void;
-  onDblClick: () => void;
+  onDblClick: (e: KonvaEventObject<MouseEvent>) => void;
   onContextMenu: (e: KonvaEventObject<PointerEvent>) => void;
   onHoverEnter?: (e: KonvaEventObject<MouseEvent>) => void;
   onHoverMove?: (e: KonvaEventObject<MouseEvent>) => void;
@@ -1478,6 +1576,7 @@ const NodeShape: React.FC<{
   const isPerson = node.type === 'person';
   const updateNode = useAppStore((s) => s.updateNode);
   const groupHasActive = useAppStore((s) => s.groupHasActive);
+  const multiResizeRef = useRef<Map<string, { w: number; h: number }> | null>(null);
   const personAvatarUrl = node.type === 'person' ? (node as PersonNode).avatarUrl : undefined;
   const img = useHtmlImage(personAvatarUrl);
 
@@ -1487,7 +1586,7 @@ const NodeShape: React.FC<{
     const padY = Math.max(6, Math.round(t.height * 0.05));
     const contentW = Math.max(0, t.width - padX * 2);
     const contentH = Math.max(0, t.height - padY * 2);
-    const textStr = `${t.iconEmoji ? t.iconEmoji + ' ' : ''}${t.assigneeEmoji ?? ''} ${t.assigneeName ? t.assigneeName + ': ' : ''}${t.title}${t.description ? '\n\n' + t.description : ''}`;
+    const textStr = `${t.assigneeName ? t.assigneeName + ': ' : ''}${t.title}${t.description ? '\n\n' + t.description : ''}`;
     const baseFs = clamp(Math.min(t.width / 5, t.height / 2.4), 12, 72);
     const fs = typeof t.textSize === 'number' ? t.textSize : estimateTaskFont(textStr, baseFs, contentW, contentH, 1.15);
     return (
@@ -1500,8 +1599,8 @@ const NodeShape: React.FC<{
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onClick={(e) => onClick(e)}
-        onDblClick={() => onDblClick()}
-        onDblTap={() => onDblClick()}
+        onDblClick={(e) => onDblClick(e as unknown as KonvaEventObject<MouseEvent>)}
+        onDblTap={() => onDblClick({} as KonvaEventObject<MouseEvent>)}
         onContextMenu={onContextMenu}
         onMouseEnter={(e) => { onHoverEnter?.(e as unknown as KonvaEventObject<MouseEvent>); }}
         onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
@@ -1556,17 +1655,40 @@ const NodeShape: React.FC<{
                   height={hitH}
                   opacity={0.001}
                   draggable
-                  onDragStart={(e) => { e.cancelBubble = true; }}
+                  onDragStart={(e) => {
+                    e.cancelBubble = true;
+                    const sel = new Set(useAppStore.getState().selection.length ? useAppStore.getState().selection : [t.id]);
+                    const all = useAppStore.getState().nodes;
+                    const map = new Map<string, { w: number; h: number }>();
+                    sel.forEach((id) => {
+                      const n = all.find((nn) => nn.id === id);
+                      if (n) map.set(id, { w: n.width, h: n.height });
+                    });
+                    multiResizeRef.current = map;
+                  }}
                   onDragMove={(e) => {
                     e.cancelBubble = true;
+                    const startMap = multiResizeRef.current;
                     const hx = e.target.x();
                     const hy = e.target.y();
                     const minW = 120, minH = 80, maxW = 1600, maxH = 1200;
+                    const base = startMap?.get(t.id) || { w: t.width, h: t.height };
                     const newW = Math.max(minW, Math.min(maxW, hx + hitW));
                     const newH = Math.max(minH, Math.min(maxH, hy + hitH));
-                    void updateNode(t.id, { width: newW, height: newH });
+                    const sx = newW / base.w;
+                    const sy = newH / base.h;
+                    const s = Math.min(sx, sy);
+                    if (startMap && startMap.size > 1) {
+                      startMap.forEach((size, id) => {
+                        const w2 = Math.max(minW, Math.min(maxW, Math.round(size.w * s)));
+                        const h2 = Math.max(minH, Math.min(maxH, Math.round(size.h * s)));
+                        void updateNode(id, { width: w2, height: h2 });
+                      });
+                    } else {
+                      void updateNode(t.id, { width: newW, height: newH });
+                    }
                   }}
-                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: t.width - hitW, y: t.height - hitH }); }}
+                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: t.width - hitW, y: t.height - hitH }); multiResizeRef.current = null; }}
                 />
               );
             })()}
@@ -1596,8 +1718,8 @@ const NodeShape: React.FC<{
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onClick={(e) => onClick(e as unknown as KonvaEventObject<MouseEvent>)}
-        onDblClick={() => onDblClick()}
-        onDblTap={() => onDblClick()}
+        onDblClick={(e) => onDblClick(e as unknown as KonvaEventObject<MouseEvent>)}
+        onDblTap={() => onDblClick({} as KonvaEventObject<MouseEvent>)}
         onContextMenu={onContextMenu}
         onMouseEnter={(e) => { onHoverEnter?.(e as unknown as KonvaEventObject<MouseEvent>); }}
         onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
@@ -1634,6 +1756,16 @@ const NodeShape: React.FC<{
           <Circle x={g.width - 12} y={12} radius={6} fill={'#FF6B6B'} shadowBlur={8} />
         ) : null}
 
+        {/* corner badge: type marker for group */}
+        <Text
+          x={4}
+          y={4}
+          text={'🟢'}
+          fontSize={16}
+          align="left"
+          verticalAlign="top"
+        />
+
         {/* resize handle for group (keeps square) — 15% от размеров */}
         {selected ? (
           <>
@@ -1649,16 +1781,36 @@ const NodeShape: React.FC<{
                   height={hitH}
                   opacity={0.001}
                   draggable
-                  onDragStart={(e) => { e.cancelBubble = true; }}
+                  onDragStart={(e) => {
+                    e.cancelBubble = true;
+                    const sel = new Set(useAppStore.getState().selection.length ? useAppStore.getState().selection : [g.id]);
+                    const all = useAppStore.getState().nodes;
+                    const map = new Map<string, { w: number; h: number }>();
+                    sel.forEach((id) => {
+                      const n = all.find((nn) => nn.id === id);
+                      if (n) map.set(id, { w: n.width, h: n.height });
+                    });
+                    multiResizeRef.current = map;
+                  }}
                   onDragMove={(e) => {
                     e.cancelBubble = true;
+                    const startMap = multiResizeRef.current;
                     const hx = e.target.x();
                     const hy = e.target.y();
                     const minS = 100, maxS = 1600;
+                    const base = startMap?.get(g.id) || { w: g.width, h: g.height };
                     const size = Math.max(minS, Math.min(maxS, Math.max(hx + hitW, hy + hitH)));
-                    void updateNode(g.id, { width: size, height: size });
+                    const s = size / Math.max(base.w, base.h);
+                    if (startMap && startMap.size > 1) {
+                      startMap.forEach((size0, id) => {
+                        const target = Math.max(minS, Math.min(maxS, Math.round(Math.max(size0.w, size0.h) * s)));
+                        void updateNode(id, { width: target, height: target });
+                      });
+                    } else {
+                      void updateNode(g.id, { width: size, height: size });
+                    }
                   }}
-                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: g.width - hitW, y: g.height - hitH }); }}
+                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: g.width - hitW, y: g.height - hitH }); multiResizeRef.current = null; }}
                 />
               );
             })()}
@@ -1682,8 +1834,8 @@ const NodeShape: React.FC<{
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onClick={(e) => onClick(e as unknown as KonvaEventObject<MouseEvent>)}
-        onDblClick={() => onDblClick()}
-        onDblTap={() => onDblClick()}
+        onDblClick={(e) => onDblClick(e as unknown as KonvaEventObject<MouseEvent>)}
+        onDblTap={() => onDblClick({} as KonvaEventObject<MouseEvent>)}
         onContextMenu={onContextMenu}
         onMouseEnter={(e) => { onHoverEnter?.(e as unknown as KonvaEventObject<MouseEvent>); }}
         onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
@@ -1708,6 +1860,14 @@ const NodeShape: React.FC<{
         ) : (
           <Text x={0} y={0} width={p.width} height={p.height} text={p.avatarEmoji || '👤'} fontSize={r * 1.8} align="center" verticalAlign="middle" />
         )}
+        {/* corner badge: role marker (employee/partner/bot) */}
+        {(() => {
+          const role = p.role;
+          const icon = role === 'bot' ? '🤖' : role === 'partner' ? '🤝' : '👤';
+          return (
+            <Text x={4} y={4} text={icon} fontSize={16} align="left" verticalAlign="top" />
+          );
+        })()}
         <Text x={4} y={p.height + 4} width={Math.max(0, p.width - 8)} align="center" text={p.name} fontSize={nameFs} fill={'#2B1F1F'} wrap="none" ellipsis />
         {selected ? (
           <>
@@ -1723,16 +1883,36 @@ const NodeShape: React.FC<{
                   height={hitH}
                   opacity={0.001}
                   draggable
-                  onDragStart={(e) => { e.cancelBubble = true; }}
+                  onDragStart={(e) => {
+                    e.cancelBubble = true;
+                    const sel = new Set(useAppStore.getState().selection.length ? useAppStore.getState().selection : [p.id]);
+                    const all = useAppStore.getState().nodes;
+                    const map = new Map<string, { w: number; h: number }>();
+                    sel.forEach((id) => {
+                      const n = all.find((nn) => nn.id === id);
+                      if (n) map.set(id, { w: n.width, h: n.height });
+                    });
+                    multiResizeRef.current = map;
+                  }}
                   onDragMove={(e) => {
                     e.cancelBubble = true;
+                    const startMap = multiResizeRef.current;
                     const hx = e.target.x();
                     const hy = e.target.y();
                     const minS = 80, maxS = 800;
+                    const base = startMap?.get(p.id) || { w: p.width, h: p.height };
                     const size = Math.max(minS, Math.min(maxS, Math.max(hx + hitW, hy + hitH)));
-                    void updateNode(p.id, { width: size, height: size });
+                    const s = size / Math.max(base.w, base.h);
+                    if (startMap && startMap.size > 1) {
+                      startMap.forEach((size0, id) => {
+                        const target = Math.max(minS, Math.min(maxS, Math.round(Math.max(size0.w, size0.h) * s)));
+                        void updateNode(id, { width: target, height: target });
+                      });
+                    } else {
+                      void updateNode(p.id, { width: size, height: size });
+                    }
                   }}
-                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: p.width - hitW, y: p.height - hitH }); }}
+                  onDragEnd={(e) => { e.cancelBubble = true; e.target.position({ x: p.width - hitW, y: p.height - hitH }); multiResizeRef.current = null; }}
                 />
               );
             })()}
