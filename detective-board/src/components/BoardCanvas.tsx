@@ -1575,7 +1575,6 @@ const NodeShape: React.FC<{
   const isGroup = node.type === 'group';
   const isPerson = node.type === 'person';
   const updateNode = useAppStore((s) => s.updateNode);
-  const groupHasActive = useAppStore((s) => s.groupHasActive);
   const multiResizeRef = useRef<Map<string, { w: number; h: number }> | null>(null);
   const personAvatarUrl = node.type === 'person' ? (node as PersonNode).avatarUrl : undefined;
   const img = useHtmlImage(personAvatarUrl);
@@ -1586,7 +1585,7 @@ const NodeShape: React.FC<{
     const padY = Math.max(6, Math.round(t.height * 0.05));
     const contentW = Math.max(0, t.width - padX * 2);
     const contentH = Math.max(0, t.height - padY * 2);
-    const textStr = `${t.assigneeName ? t.assigneeName + ': ' : ''}${t.title}${t.description ? '\n\n' + t.description : ''}`;
+    const textStr = `${t.title}`;
     const baseFs = clamp(Math.min(t.width / 5, t.height / 2.4), 12, 72);
     const fs = typeof t.textSize === 'number' ? t.textSize : estimateTaskFont(textStr, baseFs, contentW, contentH, 1.15);
     return (
@@ -1707,7 +1706,7 @@ const NodeShape: React.FC<{
     const contentW = Math.max(0, d - pad * 2);
     const contentH = Math.max(0, d - pad * 2);
     const groupFs = typeof g.titleSize === 'number' ? g.titleSize : estimateTaskFont(g.name, baseGroup, contentW, contentH, 1.1);
-    const hasActive = groupHasActive(g.id);
+    // Убрали индикатор «группа не пустая» (красная точка)
     return (
       <KonvaGroup
         x={g.x}
@@ -1751,10 +1750,7 @@ const NodeShape: React.FC<{
             wrap="word"
           />
         </KonvaGroup>
-        {/* active indicator */}
-        {hasActive ? (
-          <Circle x={g.width - 12} y={12} radius={6} fill={'#FF6B6B'} shadowBlur={8} />
-        ) : null}
+        {/* active indicator removed */}
 
         {/* corner badge: type marker for group */}
         <Text
