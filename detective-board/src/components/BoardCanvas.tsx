@@ -266,8 +266,9 @@ export const BoardCanvas: React.FC = () => {
     return { x: width / 2 - levelOrigin.x * s, y: height / 2 - levelOrigin.y * s };
   }, [levelBBox, levelOrigin.x, levelOrigin.y, visibleNodes.length, width, height, viewport.scale]);
   const isNewLevel = lastLevelRef.current !== currentParentId;
-  const notSynced = Math.abs(viewport.x - desiredViewport.x) > 0.5 || Math.abs(viewport.y - desiredViewport.y) > 0.5;
-  const initializing = isNewLevel || (!didAutoCenter.current) || notSynced;
+  // Важно: не считаем расхождение с desiredViewport поводом для повторной инициализации,
+  // иначе любое пользовательское перетаскивание (pan) будет мгновенно отменяться.
+  const initializing = isNewLevel || (!didAutoCenter.current);
   const stageX = initializing ? desiredViewport.x : viewport.x;
   const stageY = initializing ? desiredViewport.y : viewport.y;
   useLayoutEffect(() => {
