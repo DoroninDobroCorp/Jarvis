@@ -36,6 +36,7 @@ export const Toolbar: React.FC = () => {
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [importMode, setImportMode] = useState<'replace' | 'merge'>('replace');
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
   const onPickFile = (mode: 'replace' | 'merge') => {
     setImportMode(mode);
     fileRef.current?.click();
@@ -58,6 +59,34 @@ export const Toolbar: React.FC = () => {
 
   const toggle = (next: Parameters<typeof setTool>[0]) => {
     setTool(tool === next ? 'none' : next);
+  };
+
+  // Сохранение текущего центра вида как стартового
+  const viewport = useAppStore((s) => s.viewport);
+  const currentParentId = useAppStore((s) => s.currentParentId);
+  const saveStartCenter = () => {
+    try {
+      const cx = (window.innerWidth / 2 - viewport.x) / viewport.scale;
+      const cy = (window.innerHeight / 2 - viewport.y) / viewport.scale;
+      const payload = { x: Math.round(cx), y: Math.round(cy), scale: viewport.scale };
+      const levelKey = currentParentId ?? '__ROOT__';
+      // write per-level map
+      try {
+        const raw = localStorage.getItem('START_VIEW_BY_LEVEL');
+        const map = raw ? (JSON.parse(raw) as Record<string, { x: number; y: number; scale?: number }>) : {};
+        map[levelKey] = payload;
+        localStorage.setItem('START_VIEW_BY_LEVEL', JSON.stringify(map));
+      } catch {}
+      // legacy for root
+      if (levelKey === '__ROOT__') {
+        localStorage.setItem('START_VIEW_CENTER', JSON.stringify(payload));
+      }
+      log.info('startViewCenter:saved', { levelKey, ...payload });
+      alert('Стартовый центр сохранён');
+    } catch (e) {
+      console.error(e);
+      alert('Не удалось сохранить центр');
+    }
   };
 
   return (
@@ -107,8 +136,17 @@ export const Toolbar: React.FC = () => {
           <button className="tool-btn" title="Очистить всю базу" onClick={() => { if (confirm('Очистить все данные? Это действие необратимо.')) { void resetAll(); } }}>🗑 Очистить всё</button>
           <span style={{ width: 8 }} />
           <button className="tool-btn" title="Экспорт в JSON" onClick={() => { log.info('export:click'); void exportBackup(); }}>⤓ Экспорт</button>
-          <button className="tool-btn" title="Импорт (заменить данные)" onClick={() => onPickFile('replace')}>⤒ Импорт (замена)</button>
-          <button className="tool-btn" title="Импорт (слияние/merge)" onClick={() => onPickFile('merge')}>⤒ Импорт (merge)</button>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <button className="tool-btn" title="Импорт / Ещё" onClick={() => setImportMenuOpen((v) => !v)}>☰ Импорт/Ещё</button>
+            {importMenuOpen ? (
+              <div style={{ position: 'absolute', right: 0, top: '100%', background: '#222', color: '#fff', border: '1px solid #444', borderRadius: 6, padding: 8, minWidth: 220, zIndex: 1000, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}>
+                <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Импорт (замена)" onClick={() => { onPickFile('replace'); setImportMenuOpen(false); }}>⤒ Импорт (замена)</button>
+                <button className="tool-btn" style={{ display: 'block', width: '100%', marginTop: 6 }} title="Импорт (merge)" onClick={() => { onPickFile('merge'); setImportMenuOpen(false); }}>⤒ Импорт (merge)</button>
+                <div style={{ height: 1, background: '#444', margin: '6px 0' }} />
+                <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Запомнить текущий центр вида для старта" onClick={() => { saveStartCenter(); setImportMenuOpen(false); }}>📍</button>
+              </div>
+            ) : null}
+          </div>
           <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={onFileChange} />
         </div>
       </div>

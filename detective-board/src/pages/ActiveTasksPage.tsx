@@ -149,6 +149,9 @@ export const ActiveTasksPage: React.FC = () => {
                         recurrence: t.recurrence as Recurrence,
                         textSize: t.textSize,
                         iconEmoji: t.iconEmoji,
+                        subtasks: Array.isArray(t.subtasks)
+                          ? t.subtasks.map((s) => ({ id: Math.random().toString(36).slice(2), title: s.title, done: false, createdAt: Date.now() }))
+                          : undefined,
                       });
                     } else {
                       await updateNode(t.id, { status: 'done', completedAt: nowTs });

@@ -143,6 +143,32 @@ export const BoardCanvas: React.FC = () => {
     try { return localStorage.getItem('DEBUG_DIAG') === '1'; } catch { return false; }
   }, []);
 
+  // Ключ уровня для сохранения/восстановления вида
+  const levelKey = useMemo(() => currentParentId ?? '__ROOT__', [currentParentId]);
+  // Есть ли сохранённый стартовый центр вида для текущего уровня?
+  const hasSavedStart = useMemo(() => {
+    try {
+      // Новый формат: START_VIEW_BY_LEVEL: { [levelKey]: { x,y,scale? } }
+      const rawMap = localStorage.getItem('START_VIEW_BY_LEVEL');
+      if (rawMap) {
+        const map = JSON.parse(rawMap) as Record<string, { x: number; y: number; scale?: number }> | null;
+        const p = map && map[levelKey];
+        if (p && typeof p.x === 'number' && typeof p.y === 'number') return true;
+      }
+      // Legacy для корня: START_VIEW_CENTER
+      if (levelKey === '__ROOT__') {
+        const rawLegacy = localStorage.getItem('START_VIEW_CENTER');
+        if (rawLegacy) {
+          const parsed = JSON.parse(rawLegacy) as { x?: number; y?: number } | null;
+          if (parsed && typeof parsed.x === 'number' && typeof parsed.y === 'number') return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [levelKey]);
+
   const { width, height } = useWindowSize();
 
   const stageRef = useRef<Konva.Stage | null>(null);
@@ -220,7 +246,7 @@ export const BoardCanvas: React.FC = () => {
 
   useLayoutEffect(() => {
     if (!levelBBox) return;
-    if (!didAutoCenter.current) {
+    if (!didAutoCenter.current && !hasSavedStart) {
       const s = viewport.scale;
       const nx = width / 2 - (levelOrigin.x + levelBBox.cx) * s;
       const ny = height / 2 - (levelOrigin.y + levelBBox.cy) * s;
@@ -228,9 +254,37 @@ export const BoardCanvas: React.FC = () => {
       didAutoCenter.current = true;
       log.info('autocenter', { level: currentParentId, center: { x: levelBBox.cx, y: levelBBox.cy } });
     }
-  }, [levelBBox, levelOrigin.x, levelOrigin.y, viewport.scale, width, height, setViewport, currentParentId, log]);
+  }, [levelBBox, levelOrigin.x, levelOrigin.y, viewport.scale, width, height, setViewport, currentParentId, log, hasSavedStart]);
 
-  
+  // Восстановление стартового центра/масштаба при смене уровня (per-level)
+  const lastRestoredLevelRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    try {
+      const lk = levelKey;
+      if (lastRestoredLevelRef.current === lk) return;
+      // Читаем из нового формата (per-level)
+      let payload: { x?: number; y?: number; scale?: number } | null | undefined;
+      const rawMap = localStorage.getItem('START_VIEW_BY_LEVEL');
+      if (rawMap) {
+        const map = JSON.parse(rawMap) as Record<string, { x: number; y: number; scale?: number }> | null;
+        payload = map ? map[lk] : undefined;
+      }
+      // Legacy: если корень и нет per-level — пробуем START_VIEW_CENTER
+      if ((!payload || typeof payload.x !== 'number' || typeof payload.y !== 'number') && lk === '__ROOT__') {
+        const rawLegacy = localStorage.getItem('START_VIEW_CENTER');
+        if (rawLegacy) payload = JSON.parse(rawLegacy) as { x?: number; y?: number; scale?: number } | null;
+      }
+      if (!payload || typeof payload.x !== 'number' || typeof payload.y !== 'number') return;
+      const s = (typeof payload.scale === 'number' && isFinite(payload.scale) && payload.scale > 0) ? payload.scale : useAppStore.getState().viewport.scale;
+      const nx = width / 2 - payload.x * s;
+      const ny = height / 2 - payload.y * s;
+      setViewport({ x: nx, y: ny, scale: s });
+      didAutoCenter.current = true; // подавляем автоцентровку на первый экран
+      lastLevelRef.current = currentParentId; // помечаем уровень как инициализированный
+      lastRestoredLevelRef.current = lk; // запоминаем, что этот уровень восстановлен
+      log.info('startViewCenter:restore', { level: lk, center: { x: payload.x, y: payload.y, scale: s } });
+    } catch {}
+  }, [levelKey, width, height, setViewport, currentParentId, log]);
 
   // Если в группе нет детей — один раз центрируем локальный (0,0) в центр экрана, чтобы не было "пустоты"
   useLayoutEffect(() => {
@@ -274,16 +328,16 @@ export const BoardCanvas: React.FC = () => {
   const isNewLevel = lastLevelRef.current !== currentParentId;
   // Важно: не считаем расхождение с desiredViewport поводом для повторной инициализации,
   // иначе любое пользовательское перетаскивание (pan) будет мгновенно отменяться.
-  const initializing = isNewLevel || (!didAutoCenter.current);
+  const initializing = (!hasSavedStart) && (isNewLevel || !didAutoCenter.current);
   const stageX = initializing ? desiredViewport.x : viewport.x;
   const stageY = initializing ? desiredViewport.y : viewport.y;
   useLayoutEffect(() => {
-    if (lastLevelRef.current !== currentParentId) {
+    if (lastLevelRef.current !== currentParentId && !hasSavedStart) {
       setViewport({ x: desiredViewport.x, y: desiredViewport.y, scale: viewport.scale });
       didAutoCenter.current = true;
       lastLevelRef.current = currentParentId;
     }
-  }, [currentParentId, desiredViewport.x, desiredViewport.y, setViewport, viewport.scale]);
+  }, [currentParentId, desiredViewport.x, desiredViewport.y, setViewport, viewport.scale, hasSavedStart]);
 
   // wheel zoom
   const onWheel = useCallback((e: KonvaEventObject<WheelEvent>) => {
@@ -315,16 +369,18 @@ export const BoardCanvas: React.FC = () => {
   const lastPosRef = useRef<{ x: number; y: number } | null>(null);
 
   const onMouseDown = useCallback((e: KonvaEventObject<MouseEvent>) => {
-    const clickedOnStage = e.target === e.target.getStage();
+    const stage = e.target.getStage();
+    const grp = levelGroupRef.current as unknown as Konva.Node | null;
+    const isLayer = (e.target as any)?.getClassName?.() === 'Layer';
+    const clickedOnStage = e.target === stage || isLayer || (grp ? e.target === grp : false);
     if (!clickedOnStage) return;
-    const stage = stageRef.current;
     const pointer = stage?.getPointerPosition();
     if (!pointer) return;
     // Точное преобразование указателя в локальные координаты уровня
     let lx: number, ly: number;
-    const grp = levelGroupRef.current;
-    if (grp) {
-      const t = grp.getAbsoluteTransform().copy();
+    const grpNode = levelGroupRef.current;
+    if (grpNode) {
+      const t = grpNode.getAbsoluteTransform().copy();
       t.invert();
       const p = t.point(pointer);
       lx = p.x; ly = p.y;
