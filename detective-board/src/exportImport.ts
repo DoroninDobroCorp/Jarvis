@@ -1,6 +1,6 @@
 import { db } from './db';
 import { getLogger } from './logger';
-import type { AnyNode, LinkThread, User, BookItem, MovieItem } from './types';
+import type { AnyNode, LinkThread, User, BookItem, MovieItem, GameItem } from './types';
 import { useAppStore } from './store';
 
 export type BackupData = {
@@ -12,6 +12,7 @@ export type BackupData = {
   users: User[];
   books: BookItem[];
   movies: MovieItem[];
+  games: GameItem[];
 };
 
 const log = getLogger('backup');
@@ -22,12 +23,13 @@ function makeFilename() {
 }
 
 export async function exportBackup(): Promise<void> {
-  const [nodes, links, users, books, movies] = await Promise.all([
+  const [nodes, links, users, books, movies, games] = await Promise.all([
     db.nodes.toArray(),
     db.links.toArray(),
     db.users.toArray(),
     db.books.toArray(),
     db.movies.toArray(),
+    db.games.toArray(),
   ]);
   const data: BackupData = {
     $schema: 'https://example.local/detective-board/backup.schema.json',
@@ -38,6 +40,7 @@ export async function exportBackup(): Promise<void> {
     users,
     books,
     movies,
+    games,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -48,7 +51,7 @@ export async function exportBackup(): Promise<void> {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    log.info('export:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length });
+    log.info('export:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length });
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -67,19 +70,22 @@ export async function importBackup(file: File, mode: 'replace' | 'merge' = 'repl
   const users = Array.isArray(data.users) ? (data.users as User[]) : [];
   const books = Array.isArray(data.books) ? (data.books as BookItem[]) : [];
   const movies = Array.isArray(data.movies) ? (data.movies as MovieItem[]) : [];
+  const games = Array.isArray(data.games) ? (data.games as GameItem[]) : [];
 
   if (mode === 'replace') {
-    await db.transaction('rw', [db.nodes, db.links, db.users, db.books, db.movies], async () => {
+    await db.transaction('rw', [db.nodes, db.links, db.users, db.books, db.movies, db.games], async () => {
       await db.nodes.clear();
       await db.links.clear();
       await db.users.clear();
       await db.books.clear();
       await db.movies.clear();
+      await db.games.clear();
       if (nodes.length) await db.nodes.bulkAdd(nodes);
       if (links.length) await db.links.bulkAdd(links);
       if (users.length) await db.users.bulkAdd(users);
       if (books.length) await db.books.bulkAdd(books);
       if (movies.length) await db.movies.bulkAdd(movies);
+      if (games.length) await db.games.bulkAdd(games);
     });
     useAppStore.setState({
       nodes,
@@ -91,15 +97,16 @@ export async function importBackup(file: File, mode: 'replace' | 'merge' = 'repl
       historyFuture: [],
       currentParentId: null,
     });
-    log.info('import:replace:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length });
+    log.info('import:replace:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length });
   } else {
     // merge: просто дозаписываем id-совместимые сущности, конфликты по id заменяются (put)
-    await db.transaction('rw', [db.nodes, db.links, db.users, db.books, db.movies], async () => {
+    await db.transaction('rw', [db.nodes, db.links, db.users, db.books, db.movies, db.games], async () => {
       if (nodes.length) await db.nodes.bulkPut(nodes);
       if (links.length) await db.links.bulkPut(links);
       if (users.length) await db.users.bulkPut(users);
       if (books.length) await db.books.bulkPut(books);
       if (movies.length) await db.movies.bulkPut(movies);
+      if (games.length) await db.games.bulkPut(games);
     });
     // синхронизируем стор с БД
     const [n2, l2, u2] = await Promise.all([db.nodes.toArray(), db.links.toArray(), db.users.toArray()]);

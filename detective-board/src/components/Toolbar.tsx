@@ -113,6 +113,7 @@ export const Toolbar: React.FC = () => {
             <option value="">— выбрать —</option>
             <option value="/books">Книги</option>
             <option value="/movies">Фильмы</option>
+            <option value="/games">Игры</option>
           </select>
         </div>
         <div style={{ marginLeft: 12 }}>

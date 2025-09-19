@@ -1,6 +1,6 @@
 import Dexie from 'dexie';
 import type { Table } from 'dexie';
-import type { AnyNode, LinkThread, User, BookItem, MovieItem } from './types';
+import type { AnyNode, LinkThread, User, BookItem, MovieItem, GameItem } from './types';
 import { getLogger } from './logger';
 
 export class DetectiveDB extends Dexie {
@@ -9,6 +9,7 @@ export class DetectiveDB extends Dexie {
   users!: Table<User, string>;
   books!: Table<BookItem, string>;
   movies!: Table<MovieItem, string>;
+  games!: Table<GameItem, string>;
 
   constructor() {
     super('detective_board_db');
@@ -24,6 +25,15 @@ export class DetectiveDB extends Dexie {
       users: 'id, name',
       books: 'id, title, createdAt',
       movies: 'id, title, createdAt',
+    });
+    // v3: add games table
+    this.version(3).stores({
+      nodes: 'id, parentId, type, updatedAt',
+      links: 'id, fromId, toId',
+      users: 'id, name',
+      books: 'id, title, createdAt',
+      movies: 'id, title, createdAt',
+      games: 'id, title, createdAt',
     });
   }
 }

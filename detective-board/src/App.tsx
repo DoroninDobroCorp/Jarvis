@@ -8,6 +8,7 @@ import { InspectorPanel } from './components/InspectorPanel';
 import { ActiveTasksPage } from './pages/ActiveTasksPage';
 import { BooksPage } from './pages/BooksPage';
 import { MoviesPage } from './pages/MoviesPage';
+import { GamesPage } from './pages/GamesPage';
 import { getLogger } from './logger';
 import { DiagPage } from './pages/DiagPage';
 import { CompletedTasksPage } from './pages/CompletedTasksPage';
@@ -51,6 +52,7 @@ function App() {
       <Route path="/done" element={<CompletedTasksPage />} />
       <Route path="/books" element={<BooksPage />} />
       <Route path="/movies" element={<MoviesPage />} />
+      <Route path="/games" element={<GamesPage />} />
       <Route path="/diag" element={<DiagPage />} />
     </Routes>
   );

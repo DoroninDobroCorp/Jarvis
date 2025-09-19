@@ -109,6 +109,14 @@ export interface MovieItem {
   createdAt: number;
 }
 
+export interface GameItem {
+  id: string;
+  title: string;
+  comment?: string;
+  coverUrl?: string;
+  createdAt: number;
+}
+
 export type Tool =
   | 'none'
   | 'link'

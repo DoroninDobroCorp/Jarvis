@@ -169,6 +169,10 @@ export const BoardCanvas: React.FC = () => {
     }
   }, [levelKey]);
 
+  // Если в сторе есть сохранённый вид для уровня — используем его и блокируем автопозиционирование
+  const levelView = useAppStore((s) => s.levelView);
+  const hasStoredLevelView = !!levelView[levelKey];
+
   const { width, height } = useWindowSize();
 
   const stageRef = useRef<Konva.Stage | null>(null);
@@ -179,6 +183,18 @@ export const BoardCanvas: React.FC = () => {
   const [pendingLinkFrom, setPendingLinkFrom] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
   const [linkCtxMenu, setLinkCtxMenu] = useState<{ x: number; y: number; linkId: string } | null>(null);
+  // Локальный ввод даты дедлайна в контекстном меню, чтобы не дёргалось при onChange
+  const [ctxDueLocal, setCtxDueLocal] = useState<string>('');
+  useEffect(() => {
+    if (!ctxMenu) { setCtxDueLocal(''); return; }
+    const n = nodes.find((x) => x.id === ctxMenu.nodeId);
+    if (n && n.type === 'task') {
+      const t = n as TaskNode;
+      setCtxDueLocal(t.dueDate ? t.dueDate.slice(0, 10) : '');
+    } else {
+      setCtxDueLocal('');
+    }
+  }, [ctxMenu, nodes]);
   const [ctxMenuPos, setCtxMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [linkCtxMenuPos, setLinkCtxMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [ctxRecOpen, setCtxRecOpen] = useState(false);
@@ -246,7 +262,7 @@ export const BoardCanvas: React.FC = () => {
 
   useLayoutEffect(() => {
     if (!levelBBox) return;
-    if (!didAutoCenter.current && !hasSavedStart) {
+    if (!didAutoCenter.current && !hasSavedStart && !hasStoredLevelView) {
       const s = viewport.scale;
       const nx = width / 2 - (levelOrigin.x + levelBBox.cx) * s;
       const ny = height / 2 - (levelOrigin.y + levelBBox.cy) * s;
@@ -254,7 +270,7 @@ export const BoardCanvas: React.FC = () => {
       didAutoCenter.current = true;
       log.info('autocenter', { level: currentParentId, center: { x: levelBBox.cx, y: levelBBox.cy } });
     }
-  }, [levelBBox, levelOrigin.x, levelOrigin.y, viewport.scale, width, height, setViewport, currentParentId, log, hasSavedStart]);
+  }, [levelBBox, levelOrigin.x, levelOrigin.y, viewport.scale, width, height, setViewport, currentParentId, log, hasSavedStart, hasStoredLevelView]);
 
   // Восстановление стартового центра/масштаба при смене уровня (per-level)
   const lastRestoredLevelRef = useRef<string | null>(null);
@@ -262,7 +278,7 @@ export const BoardCanvas: React.FC = () => {
     try {
       const lk = levelKey;
       if (lastRestoredLevelRef.current === lk) return;
-      // Читаем из нового формата (per-level)
+      if (hasStoredLevelView) { lastRestoredLevelRef.current = lk; return; }
       let payload: { x?: number; y?: number; scale?: number } | null | undefined;
       const rawMap = localStorage.getItem('START_VIEW_BY_LEVEL');
       if (rawMap) {
@@ -284,7 +300,7 @@ export const BoardCanvas: React.FC = () => {
       lastRestoredLevelRef.current = lk; // запоминаем, что этот уровень восстановлен
       log.info('startViewCenter:restore', { level: lk, center: { x: payload.x, y: payload.y, scale: s } });
     } catch {}
-  }, [levelKey, width, height, setViewport, currentParentId, log]);
+  }, [levelKey, width, height, setViewport, currentParentId, log, hasStoredLevelView]);
 
   // Если в группе нет детей — один раз центрируем локальный (0,0) в центр экрана, чтобы не было "пустоты"
   useLayoutEffect(() => {
@@ -328,16 +344,16 @@ export const BoardCanvas: React.FC = () => {
   const isNewLevel = lastLevelRef.current !== currentParentId;
   // Важно: не считаем расхождение с desiredViewport поводом для повторной инициализации,
   // иначе любое пользовательское перетаскивание (pan) будет мгновенно отменяться.
-  const initializing = (!hasSavedStart) && (isNewLevel || !didAutoCenter.current);
+  const initializing = (!hasSavedStart && !hasStoredLevelView) && (isNewLevel || !didAutoCenter.current);
   const stageX = initializing ? desiredViewport.x : viewport.x;
   const stageY = initializing ? desiredViewport.y : viewport.y;
   useLayoutEffect(() => {
-    if (lastLevelRef.current !== currentParentId && !hasSavedStart) {
+    if (lastLevelRef.current !== currentParentId && !hasSavedStart && !hasStoredLevelView) {
       setViewport({ x: desiredViewport.x, y: desiredViewport.y, scale: viewport.scale });
       didAutoCenter.current = true;
       lastLevelRef.current = currentParentId;
     }
-  }, [currentParentId, desiredViewport.x, desiredViewport.y, setViewport, viewport.scale, hasSavedStart]);
+  }, [currentParentId, desiredViewport.x, desiredViewport.y, setViewport, viewport.scale, hasSavedStart, hasStoredLevelView]);
 
   // wheel zoom
   const onWheel = useCallback((e: KonvaEventObject<WheelEvent>) => {
@@ -1383,10 +1399,14 @@ export const BoardCanvas: React.FC = () => {
                     type="date"
                     style={{ flex: 1 }}
                     className="date-no-icon"
-                    value={(ctxNode as TaskNode).dueDate ? (ctxNode as TaskNode).dueDate!.slice(0,10) : ''}
+                    value={ctxDueLocal}
                     onChange={(e) => {
-                      const v = e.target.value ? toIsoUTCFromYMD(e.target.value) : undefined;
-                      void useAppStore.getState().updateNode(ctxNode.id, { dueDate: v });
+                      const v = e.target.value;
+                      setCtxDueLocal(v);
+                      if (!v) { void useAppStore.getState().updateNode(ctxNode.id, { dueDate: undefined }); return; }
+                      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+                        void useAppStore.getState().updateNode(ctxNode.id, { dueDate: toIsoUTCFromYMD(v) });
+                      }
                     }}
                   />
                   <button
@@ -1488,12 +1508,21 @@ export const BoardCanvas: React.FC = () => {
                           style={{ background: '#2a2a2a', color: '#fff', border: '1px solid #444', borderRadius: 4, padding: '4px 6px' }}
                           value={(() => { const r = (ctxNode as TaskNode).recurrence as Recurrence | undefined; return r && r.kind === 'interval' ? r.anchorDate.slice(0,10) : todayYMD(); })()}
                           onChange={(e) => {
-                            const anchor = e.target.value ? toIsoUTCFromYMD(e.target.value) : new Date().toISOString();
+                            const raw = e.target.value;
                             const curr = (ctxNode as TaskNode).recurrence as Recurrence | undefined;
                             const n = curr && curr.kind === 'interval' ? curr.everyDays : 7;
-                            const rec = { kind: 'interval', everyDays: n, anchorDate: anchor } as const;
-                            const next = computeNextDueDate(rec, new Date());
-                            void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                            if (!raw) {
+                              const rec = { kind: 'interval', everyDays: n, anchorDate: new Date().toISOString() } as const;
+                              const next = computeNextDueDate(rec, new Date());
+                              void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                              return;
+                            }
+                            if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+                              const anchor = toIsoUTCFromYMD(raw);
+                              const rec = { kind: 'interval', everyDays: n, anchorDate: anchor } as const;
+                              const next = computeNextDueDate(rec, new Date());
+                              void useAppStore.getState().updateNode(ctxNode.id, { recurrence: rec, dueDate: next ?? (ctxNode as TaskNode).dueDate });
+                            }
                           }}
                           title="Начинать с"
                         />
@@ -1843,9 +1872,12 @@ const NodeShape: React.FC<{
             lineHeight={1.15}
           />
         </KonvaGroup>
-        {/* status dot when in_progress */}
-        {t.status === 'in_progress' ? (
-          <Circle x={t.width - 12} y={12} radius={6} fill={'#FF6B6B'} shadowBlur={8} />
+        {/* attention badge for active & actual tasks */}
+        {(t.isActual !== false) && (t.status === 'in_progress' || t.status === 'active') ? (
+          <>
+            <Rect x={t.width - 22} y={4} width={18} height={18} cornerRadius={9} fill={'#FFE08A'} shadowBlur={4} stroke={'#E0B84D'} strokeWidth={1} />
+            <Text x={t.width - 22} y={4} width={18} height={18} text={'⏳'} fontSize={14} align="center" verticalAlign="middle" />
+          </>
         ) : null}
 
         {/* resize handle (bottom-right): хит-зона 15% от размеров */}

@@ -11,6 +11,8 @@ export const InspectorPanel: React.FC = () => {
   const enterGroup = useAppStore((s) => s.enterGroup);
   const log = getLogger('Inspector');
   const [recOpen, setRecOpen] = useState(false);
+  // Локальное состояние для ввода даты дедлайна: даёт возможность вводить без дёрганий
+  const [dueLocal, setDueLocal] = useState<string>('');
 
   const node = useMemo<AnyNode | undefined>(() => {
     if (selection.length !== 1) return undefined;
@@ -24,6 +26,16 @@ export const InspectorPanel: React.FC = () => {
       log.debug('selection:node', { id: node.id, type: node.type });
     }
   }, [node, log]);
+
+  // Синхронизация локального состояния даты со стором при смене выделения/даты
+  useEffect(() => {
+    if (node && node.type === 'task') {
+      const t = node as TaskNode;
+      setDueLocal(t.dueDate ? t.dueDate.slice(0, 10) : '');
+    } else {
+      setDueLocal('');
+    }
+  }, [node]);
 
   if (!node) {
     return (
@@ -67,8 +79,15 @@ export const InspectorPanel: React.FC = () => {
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <input
               type="date"
-              value={t.dueDate ? t.dueDate.slice(0, 10) : ''}
-              onChange={(e) => updateNode(t.id, { dueDate: e.target.value ? toIsoUTCFromYMD(e.target.value) : undefined })}
+              value={dueLocal}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDueLocal(v);
+                if (!v) { void updateNode(t.id, { dueDate: undefined }); return; }
+                if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+                  void updateNode(t.id, { dueDate: toIsoUTCFromYMD(v) });
+                }
+              }}
             />
             <button type="button" className="tool-btn" title="Повтор" onClick={() => setRecOpen((v) => !v)}>⟲ Повтор</button>
           </div>
@@ -136,9 +155,17 @@ export const InspectorPanel: React.FC = () => {
                         type="date"
                         value={typeof t.recurrence === 'object' && t.recurrence?.kind === 'interval' ? (t.recurrence.anchorDate.slice(0,10)) : todayYMD()}
                         onChange={(e) => {
-                          const anchor = e.target.value ? toIsoUTCFromYMD(e.target.value) : new Date().toISOString();
-                          const n = (typeof t.recurrence === 'object' && t.recurrence?.kind === 'interval') ? t.recurrence.everyDays : 7;
-                          setRecurrence({ kind: 'interval', everyDays: n, anchorDate: anchor });
+                          const val = e.target.value;
+                          if (!val) {
+                            const n = (typeof t.recurrence === 'object' && t.recurrence?.kind === 'interval') ? t.recurrence.everyDays : 7;
+                            setRecurrence({ kind: 'interval', everyDays: n, anchorDate: new Date().toISOString() });
+                            return;
+                          }
+                          if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+                            const anchor = toIsoUTCFromYMD(val);
+                            const n = (typeof t.recurrence === 'object' && t.recurrence?.kind === 'interval') ? t.recurrence.everyDays : 7;
+                            setRecurrence({ kind: 'interval', everyDays: n, anchorDate: anchor });
+                          }
                         }}
                         title="Начинать с"
                       />

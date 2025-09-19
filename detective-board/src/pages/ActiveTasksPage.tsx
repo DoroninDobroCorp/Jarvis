@@ -80,8 +80,18 @@ export const ActiveTasksPage: React.FC = () => {
             </div>
             {/* Карточки задач этой даты, раскладка по колонкам */}
             {g.tasks.map((t) => (
-              <div key={t.id} className="active-item">
-                <div className="active-item__title">{t.title}</div>
+              <div key={t.id} className="active-item" style={{ position: 'relative' }}>
+                {(t.status === 'in_progress' || t.status === 'active') && t.isActual !== false ? (
+                  <div
+                    title="Требует внимания"
+                    aria-label="Требует внимания"
+                    data-testid="attention-badge"
+                    style={{ position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: '50%', background: '#FFE08A', color: '#333', display: 'grid', placeItems: 'center', fontSize: 13, lineHeight: 1, boxShadow: '0 1px 4px rgba(0,0,0,0.25)', zIndex: 2, border: '1px solid #E0B84D', pointerEvents: 'none' }}
+                  >⏳</div>
+                ) : null}
+                <div className="active-item__title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {t.title}
+                </div>
                 {t.description ? <div className="active-item__desc">{t.description}</div> : null}
                 <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {Array.isArray(t.subtasks) && t.subtasks.length > 0 ? (

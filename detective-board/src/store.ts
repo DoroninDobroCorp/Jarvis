@@ -12,6 +12,8 @@ export interface AppState {
 
   viewport: { x: number; y: number; scale: number };
   currentParentId: string | null; // null = root
+  // Запоминаем последний вид для каждого уровня (ключ '__ROOT__' для null)
+  levelView: Record<string, { x: number; y: number; scale: number }>;
 
   tool: Tool;
   selection: string[]; // selected node ids
@@ -82,6 +84,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   viewport: { x: 0, y: 0, scale: 1 },
   currentParentId: null,
+  levelView: {},
 
   tool: 'none',
   selection: [],
@@ -570,7 +573,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   enterGroup: (id) => {
     const node = get().nodes.find((n) => n.id === id && n.type === 'group');
     if (!node) return;
-    set({ currentParentId: id });
+    // сохранить текущий вид для текущего уровня
+    const currKey = get().currentParentId ?? '__ROOT__';
+    const currVp = get().viewport;
+    const saved = { x: currVp.x, y: currVp.y, scale: currVp.scale };
+    const targetKey = id;
+    const nextVp = get().levelView[targetKey];
+    set((s) => ({
+      currentParentId: id,
+      levelView: { ...s.levelView, [currKey]: saved },
+      viewport: nextVp ? { ...nextVp } : s.viewport,
+    }));
     log.info('enterGroup', { id });
   },
   goUp: () => {
@@ -578,7 +591,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!curr) return;
     const group = get().nodes.find((n) => n.id === curr && n.type === 'group') as GroupNode | undefined;
     const parentId = group?.parentId ?? null;
-    set({ currentParentId: parentId });
+    // сохранить текущий вид для текущего уровня
+    const currKey = curr;
+    const currVp = get().viewport;
+    const saved = { x: currVp.x, y: currVp.y, scale: currVp.scale };
+    const targetKey = parentId ?? '__ROOT__';
+    const nextVp = get().levelView[targetKey];
+    set((s) => ({
+      currentParentId: parentId,
+      levelView: { ...s.levelView, [currKey]: saved },
+      viewport: nextVp ? { ...nextVp } : s.viewport,
+    }));
     log.info('goUp', { from: curr, to: parentId });
   },
   revealNode: (id) => {
@@ -654,7 +677,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setViewport: (vp) => {
     log.debug('setViewport', { viewport: vp });
-    set({ viewport: vp });
+    const key = get().currentParentId ?? '__ROOT__';
+    set((s) => ({ viewport: vp, levelView: { ...s.levelView, [key]: { x: vp.x, y: vp.y, scale: vp.scale } } }));
   },
   setPerfModeOverride: (mode) => {
     log.info('setPerfModeOverride', { mode });
