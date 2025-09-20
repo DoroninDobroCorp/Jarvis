@@ -13,6 +13,7 @@ import { getLogger } from './logger';
 import { DiagPage } from './pages/DiagPage';
 import { CompletedTasksPage } from './pages/CompletedTasksPage';
 import { PurchasesPage } from './pages/PurchasesPage';
+import WellbeingManager from './components/WellbeingManager';
 
 function BoardPage() {
   return (
@@ -47,16 +48,19 @@ function App() {
     log.info('route', { path: loc.pathname });
   }, [loc.pathname, log]);
   return (
-    <Routes>
-      <Route path="/" element={<BoardPage />} />
-      <Route path="/active" element={<ActiveTasksPage />} />
-      <Route path="/done" element={<CompletedTasksPage />} />
-      <Route path="/books" element={<BooksPage />} />
-      <Route path="/movies" element={<MoviesPage />} />
-      <Route path="/games" element={<GamesPage />} />
-      <Route path="/purchases" element={<PurchasesPage />} />
-      <Route path="/diag" element={<DiagPage />} />
-    </Routes>
+    <>
+      <WellbeingManager />
+      <Routes>
+        <Route path="/" element={<BoardPage />} />
+        <Route path="/active" element={<ActiveTasksPage />} />
+        <Route path="/done" element={<CompletedTasksPage />} />
+        <Route path="/books" element={<BooksPage />} />
+        <Route path="/movies" element={<MoviesPage />} />
+        <Route path="/games" element={<GamesPage />} />
+        <Route path="/purchases" element={<PurchasesPage />} />
+        <Route path="/diag" element={<DiagPage />} />
+      </Routes>
+    </>
   );
 }
 

@@ -23,7 +23,7 @@ function makeFilename() {
   return `detective-board-backup-${iso}.json`;
 }
 
-export async function exportBackup(): Promise<void> {
+export async function getBackupData(): Promise<BackupData> {
   const [nodes, links, users, books, movies, games, purchases] = await Promise.all([
     db.nodes.toArray(),
     db.links.toArray(),
@@ -45,6 +45,11 @@ export async function exportBackup(): Promise<void> {
     games,
     purchases,
   };
+  return data;
+}
+
+export async function exportBackup(): Promise<void> {
+  const data = await getBackupData();
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   try {
@@ -54,7 +59,15 @@ export async function exportBackup(): Promise<void> {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    log.info('export:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length, purchases: purchases.length });
+    log.info('export:done', {
+      nodes: data.nodes.length,
+      links: data.links.length,
+      users: data.users.length,
+      books: data.books.length,
+      movies: data.movies.length,
+      games: data.games.length,
+      purchases: data.purchases.length,
+    });
   } finally {
     URL.revokeObjectURL(url);
   }

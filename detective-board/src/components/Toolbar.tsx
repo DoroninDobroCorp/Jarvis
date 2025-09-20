@@ -3,6 +3,7 @@ import { useAppStore } from '../store';
 import { Link, useNavigate } from 'react-router-dom';
 import { getLogger } from '../logger';
 import { exportBackup, importBackup } from '../exportImport';
+import AssistantModal from './AssistantModal';
 
 const log = getLogger('Toolbar');
 
@@ -25,7 +26,6 @@ const ToolButton: React.FC<{
 export const Toolbar: React.FC = () => {
   const tool = useAppStore((s) => s.tool);
   const setTool = useAppStore((s) => s.setTool);
-  const groupSelection = useAppStore((s) => s.groupSelection);
   const deleteSelection = useAppStore((s) => s.deleteSelection);
   const goUp = useAppStore((s) => s.goUp);
   const undo = useAppStore((s) => s.undo);
@@ -37,6 +37,7 @@ export const Toolbar: React.FC = () => {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [importMode, setImportMode] = useState<'replace' | 'merge'>('replace');
   const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const onPickFile = (mode: 'replace' | 'merge') => {
     setImportMode(mode);
     fileRef.current?.click();
@@ -100,7 +101,7 @@ export const Toolbar: React.FC = () => {
         <ToolButton active={tool === 'link'} onClick={() => { log.debug('setTool', { to: 'link' }); toggle('link'); }} title="Соединить ниткой">🧵</ToolButton>
       </div>
       <div className="tool-group">
-        <ToolButton onClick={() => { log.info('groupSelection:click'); void groupSelection(); }} title="Сгруппировать в шар">🎯 Группа</ToolButton>
+        <ToolButton onClick={() => { log.info('assistant:open'); setAssistantOpen(true); }} title="ИИ-ассистент (аудио)">🤖 Ассистент</ToolButton>
         <ToolButton onClick={() => { log.info('deleteSelection:click'); void deleteSelection(); }} title="Удалить выбранное">🗑️ Удалить</ToolButton>
         <ToolButton onClick={() => { log.info('goUp:click'); goUp(); }} title="Вверх по уровню">⬆️ Назад</ToolButton>
       </div>
@@ -152,6 +153,7 @@ export const Toolbar: React.FC = () => {
           <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={onFileChange} />
         </div>
       </div>
+      {assistantOpen ? (<AssistantModal open={assistantOpen} onClose={() => setAssistantOpen(false)} />) : null}
     </div>
   );
 };
