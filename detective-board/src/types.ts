@@ -99,6 +99,8 @@ export interface BookItem {
   comment?: string;
   coverUrl?: string;
   createdAt: number;
+  status?: 'active' | 'done';
+  completedAt?: number;
 }
 
 export interface MovieItem {
@@ -107,6 +109,8 @@ export interface MovieItem {
   comment?: string;
   coverUrl?: string;
   createdAt: number;
+  status?: 'active' | 'done';
+  completedAt?: number;
 }
 
 export interface GameItem {
@@ -115,6 +119,18 @@ export interface GameItem {
   comment?: string;
   coverUrl?: string;
   createdAt: number;
+  status?: 'active' | 'done';
+  completedAt?: number;
+}
+
+export interface PurchaseItem {
+  id: string;
+  title: string;
+  comment?: string;
+  coverUrl?: string;
+  createdAt: number;
+  status?: 'active' | 'done';
+  completedAt?: number;
 }
 
 export type Tool =

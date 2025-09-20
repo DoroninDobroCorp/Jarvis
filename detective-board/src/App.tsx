@@ -12,6 +12,7 @@ import { GamesPage } from './pages/GamesPage';
 import { getLogger } from './logger';
 import { DiagPage } from './pages/DiagPage';
 import { CompletedTasksPage } from './pages/CompletedTasksPage';
+import { PurchasesPage } from './pages/PurchasesPage';
 
 function BoardPage() {
   return (
@@ -53,6 +54,7 @@ function App() {
       <Route path="/books" element={<BooksPage />} />
       <Route path="/movies" element={<MoviesPage />} />
       <Route path="/games" element={<GamesPage />} />
+      <Route path="/purchases" element={<PurchasesPage />} />
       <Route path="/diag" element={<DiagPage />} />
     </Routes>
   );

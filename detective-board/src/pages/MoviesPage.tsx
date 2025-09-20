@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { MovieItem } from '../types';
 import { getLogger } from '../logger';
+import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList } from '../imageSearch';
+import SmartImage from '../components/SmartImage';
 
 export const MoviesPage: React.FC = () => {
   const log = getLogger('MoviesPage');
@@ -16,10 +18,31 @@ export const MoviesPage: React.FC = () => {
 
   const load = async () => {
     const all = await db.movies.orderBy('createdAt').reverse().toArray();
-    setItems(all);
+    setItems(all.filter((x) => x.status !== 'done'));
   };
 
   useEffect(() => { void load(); }, []);
+
+  // On mount: try to autofill missing posters for existing items
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await db.movies.toArray();
+        const missing = list.filter((m) => !m.coverUrl);
+        for (const m of missing) {
+          const url = await fetchPoster(m.title);
+          if (url) {
+            await db.movies.update(m.id, { coverUrl: url });
+          }
+        }
+        if (missing.length) {
+          await load();
+        }
+      } catch (e) {
+        log.warn('autofill_posters:error', e as Error);
+      }
+    })();
+  }, []);
 
   const fetchPoster = async (t: string): Promise<string | undefined> => {
     try {
@@ -37,7 +60,15 @@ export const MoviesPage: React.FC = () => {
     } catch (e) {
       log.warn('fetchPoster:error', e as Error);
     }
-    return undefined;
+    // Fallback: Google Custom Search Image
+    try {
+      const alt = await fetchFirstImageFromGoogle(`${t} movie poster OR Фильм ${t}`);
+      if (alt) return alt;
+    } catch (e) {
+      log.warn('fetchPoster:google_fallback_error', e as Error);
+    }
+    // Final fallback: Unsplash Source (no key required)
+    return fallbackImageFromUnsplash(t);
   };
 
   const addItem = async () => {
@@ -47,7 +78,7 @@ export const MoviesPage: React.FC = () => {
     try {
       const id = uuidv4();
       const coverUrl = await fetchPoster(t);
-      const item: MovieItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now() };
+      const item: MovieItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now(), status: 'active' };
       await db.movies.add(item);
       setTitle('');
       setComment('');
@@ -59,6 +90,12 @@ export const MoviesPage: React.FC = () => {
 
   const removeItem = async (id: string) => {
     await db.movies.delete(id);
+    await load();
+  };
+
+  const toggleDone = async (m: MovieItem) => {
+    const done = m.status === 'done';
+    await db.movies.update(m.id, done ? { status: 'active', completedAt: undefined } : { status: 'done', completedAt: Date.now() });
     await load();
   };
 
@@ -98,18 +135,25 @@ export const MoviesPage: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16 }}>
         {items.map((m) => (
           <div key={m.id} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, background: '#fff' }}>
-            {m.coverUrl ? (
-              <img src={m.coverUrl} alt={m.title} style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }} />
-            ) : (
-              <div style={{ width: '100%', height: 260, background: '#f2f2f2', borderRadius: 6, marginBottom: 8, display: 'grid', placeItems: 'center' }}>Нет постера</div>
-            )}
+            <SmartImage
+              urls={buildFallbackList('movie', m.title, m.coverUrl)}
+              alt={m.title}
+              style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
+              onResolved={(url) => {
+                if (url && !url.startsWith('data:') && url !== m.coverUrl) {
+                  void db.movies.update(m.id, { coverUrl: url });
+                }
+              }}
+            />
             <div style={{ fontWeight: 700, color: '#000', marginBottom: 4 }}>{m.title}</div>
             {m.comment ? <div style={{ color: '#555', marginBottom: 8 }}>{m.comment}</div> : null}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ color: '#888', fontSize: 12 }}>{new Date(m.createdAt).toLocaleDateString()}</span>
               <div style={{ display: 'inline-flex', gap: 8 }}>
+                {m.status === 'done' ? <span className="badge">✅ Выполнено</span> : null}
                 <button title="Постер" aria-label="Постер" onClick={() => setOpenControls((s) => ({ ...s, [m.id]: !s[m.id] }))}>🖼</button>
-                <button onClick={() => { if (confirm('Удалить фильм?')) { void removeItem(m.id); } }}>Удалить</button>
+                <button title={m.status === 'done' ? 'Вернуть' : 'Выполнено'} aria-label={m.status === 'done' ? 'Вернуть' : 'Выполнено'} onClick={() => { void toggleDone(m); }}>{m.status === 'done' ? '↩️' : '✅'}</button>
+                <button title="Удалить" aria-label="Удалить" onClick={() => { if (confirm('Удалить фильм?')) { void removeItem(m.id); } }}>🗑️</button>
               </div>
             </div>
             {openControls[m.id] ? (

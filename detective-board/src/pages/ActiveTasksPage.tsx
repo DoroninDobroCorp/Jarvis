@@ -86,7 +86,7 @@ export const ActiveTasksPage: React.FC = () => {
                     title="Требует внимания"
                     aria-label="Требует внимания"
                     data-testid="attention-badge"
-                    style={{ position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: '50%', background: '#FFE08A', color: '#333', display: 'grid', placeItems: 'center', fontSize: 13, lineHeight: 1, boxShadow: '0 1px 4px rgba(0,0,0,0.25)', zIndex: 2, border: '1px solid #E0B84D', pointerEvents: 'none' }}
+                    style={{ position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: '50%', background: '#000', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 13, lineHeight: 1, boxShadow: '0 1px 4px rgba(0,0,0,0.35)', zIndex: 2, border: '1px solid #222', pointerEvents: 'none' }}
                   >⏳</div>
                 ) : null}
                 <div className="active-item__title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

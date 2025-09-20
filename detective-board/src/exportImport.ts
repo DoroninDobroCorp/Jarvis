@@ -1,6 +1,6 @@
 import { db } from './db';
 import { getLogger } from './logger';
-import type { AnyNode, LinkThread, User, BookItem, MovieItem, GameItem } from './types';
+import type { AnyNode, LinkThread, User, BookItem, MovieItem, GameItem, PurchaseItem } from './types';
 import { useAppStore } from './store';
 
 export type BackupData = {
@@ -13,6 +13,7 @@ export type BackupData = {
   books: BookItem[];
   movies: MovieItem[];
   games: GameItem[];
+  purchases: PurchaseItem[];
 };
 
 const log = getLogger('backup');
@@ -23,13 +24,14 @@ function makeFilename() {
 }
 
 export async function exportBackup(): Promise<void> {
-  const [nodes, links, users, books, movies, games] = await Promise.all([
+  const [nodes, links, users, books, movies, games, purchases] = await Promise.all([
     db.nodes.toArray(),
     db.links.toArray(),
     db.users.toArray(),
     db.books.toArray(),
     db.movies.toArray(),
     db.games.toArray(),
+    db.purchases.toArray(),
   ]);
   const data: BackupData = {
     $schema: 'https://example.local/detective-board/backup.schema.json',
@@ -41,6 +43,7 @@ export async function exportBackup(): Promise<void> {
     books,
     movies,
     games,
+    purchases,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -51,7 +54,7 @@ export async function exportBackup(): Promise<void> {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    log.info('export:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length });
+    log.info('export:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length, purchases: purchases.length });
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -71,21 +74,24 @@ export async function importBackup(file: File, mode: 'replace' | 'merge' = 'repl
   const books = Array.isArray(data.books) ? (data.books as BookItem[]) : [];
   const movies = Array.isArray(data.movies) ? (data.movies as MovieItem[]) : [];
   const games = Array.isArray(data.games) ? (data.games as GameItem[]) : [];
+  const purchases = Array.isArray(data.purchases) ? (data.purchases as PurchaseItem[]) : [];
 
   if (mode === 'replace') {
-    await db.transaction('rw', [db.nodes, db.links, db.users, db.books, db.movies, db.games], async () => {
+    await db.transaction('rw', [db.nodes, db.links, db.users, db.books, db.movies, db.games, db.purchases], async () => {
       await db.nodes.clear();
       await db.links.clear();
       await db.users.clear();
       await db.books.clear();
       await db.movies.clear();
       await db.games.clear();
+      await db.purchases.clear();
       if (nodes.length) await db.nodes.bulkAdd(nodes);
       if (links.length) await db.links.bulkAdd(links);
       if (users.length) await db.users.bulkAdd(users);
       if (books.length) await db.books.bulkAdd(books);
       if (movies.length) await db.movies.bulkAdd(movies);
       if (games.length) await db.games.bulkAdd(games);
+      if (purchases.length) await db.purchases.bulkAdd(purchases);
     });
     useAppStore.setState({
       nodes,
@@ -97,16 +103,17 @@ export async function importBackup(file: File, mode: 'replace' | 'merge' = 'repl
       historyFuture: [],
       currentParentId: null,
     });
-    log.info('import:replace:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length });
+    log.info('import:replace:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length, purchases: purchases.length });
   } else {
     // merge: просто дозаписываем id-совместимые сущности, конфликты по id заменяются (put)
-    await db.transaction('rw', [db.nodes, db.links, db.users, db.books, db.movies, db.games], async () => {
+    await db.transaction('rw', [db.nodes, db.links, db.users, db.books, db.movies, db.games, db.purchases], async () => {
       if (nodes.length) await db.nodes.bulkPut(nodes);
       if (links.length) await db.links.bulkPut(links);
       if (users.length) await db.users.bulkPut(users);
       if (books.length) await db.books.bulkPut(books);
       if (movies.length) await db.movies.bulkPut(movies);
       if (games.length) await db.games.bulkPut(games);
+      if (purchases.length) await db.purchases.bulkPut(purchases);
     });
     // синхронизируем стор с БД
     const [n2, l2, u2] = await Promise.all([db.nodes.toArray(), db.links.toArray(), db.users.toArray()]);
@@ -120,6 +127,6 @@ export async function importBackup(file: File, mode: 'replace' | 'merge' = 'repl
       historyFuture: [],
       currentParentId: s.currentParentId,
     }));
-    log.info('import:merge:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length });
+    log.info('import:merge:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length, purchases: purchases.length });
   }
 }

@@ -1832,7 +1832,7 @@ const NodeShape: React.FC<{
       <KonvaGroup
         x={t.x}
         y={t.y}
-        opacity={t.isActual === false ? 0.5 : 1}
+        opacity={t.isActual === false ? 0.35 : 1}
         draggable
         onDragStart={onDragStart}
         onDragMove={onDragMove}
@@ -1875,8 +1875,8 @@ const NodeShape: React.FC<{
         {/* attention badge for active & actual tasks */}
         {(t.isActual !== false) && (t.status === 'in_progress' || t.status === 'active') ? (
           <>
-            <Rect x={t.width - 22} y={4} width={18} height={18} cornerRadius={9} fill={'#FFE08A'} shadowBlur={4} stroke={'#E0B84D'} strokeWidth={1} />
-            <Text x={t.width - 22} y={4} width={18} height={18} text={'⏳'} fontSize={14} align="center" verticalAlign="middle" />
+            <Rect x={t.width - 22} y={4} width={18} height={18} cornerRadius={9} fill={'#000'} shadowBlur={4} stroke={'#222'} strokeWidth={1} />
+            <Text x={t.width - 22} y={4} width={18} height={18} text={'⏳'} fontSize={14} align="center" verticalAlign="middle" fill={'#fff'} />
           </>
         ) : null}
 
@@ -1954,7 +1954,7 @@ const NodeShape: React.FC<{
       <KonvaGroup
         x={g.x}
         y={g.y}
-        opacity={g.isActual === false ? 0.5 : 1}
+        opacity={g.isActual === false ? 0.35 : 1}
         draggable
         onDragStart={onDragStart}
         onDragMove={onDragMove}
@@ -2067,7 +2067,7 @@ const NodeShape: React.FC<{
       <KonvaGroup
         x={p.x}
         y={p.y}
-        opacity={p.isActual === false ? 0.5 : 1}
+        opacity={p.isActual === false ? 0.35 : 1}
         draggable
         onDragStart={onDragStart}
         onDragMove={onDragMove}

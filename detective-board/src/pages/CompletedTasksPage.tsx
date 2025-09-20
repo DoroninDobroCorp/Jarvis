@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store';
-import type { TaskNode } from '../types';
+import type { TaskNode, BookItem, MovieItem, GameItem, PurchaseItem } from '../types';
 import { getLogger } from '../logger';
+import { db } from '../db';
+import SmartImage from '../components/SmartImage';
+import { buildFallbackList } from '../imageSearch';
 
 export const CompletedTasksPage: React.FC = () => {
   const nodes = useAppStore((s) => s.nodes);
@@ -10,6 +13,10 @@ export const CompletedTasksPage: React.FC = () => {
   const revealNode = useAppStore((s) => s.revealNode);
   const navigate = useNavigate();
   const log = getLogger('CompletedTasks');
+  const [books, setBooks] = React.useState<BookItem[]>([]);
+  const [movies, setMovies] = React.useState<MovieItem[]>([]);
+  const [games, setGames] = React.useState<GameItem[]>([]);
+  const [purchases, setPurchases] = React.useState<PurchaseItem[]>([]);
 
   const doneTasks = useMemo(() => {
     return nodes
@@ -50,6 +57,22 @@ export const CompletedTasksPage: React.FC = () => {
     log.info('doneTasks:update', { count: doneTasks.length });
   }, [doneTasks.length, log]);
 
+  // Load done items from IndexedDB on mount
+  useEffect(() => {
+    void (async () => {
+      const [b, m, g, p] = await Promise.all([
+        db.books.toArray(),
+        db.movies.toArray(),
+        db.games.toArray(),
+        db.purchases.toArray().catch(() => [] as PurchaseItem[]),
+      ]);
+      setBooks(b.filter((x) => x.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)));
+      setMovies(m.filter((x) => x.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)));
+      setGames(g.filter((x) => x.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)));
+      setPurchases(p.filter((x) => x.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)));
+    })();
+  }, []);
+
   return (
     <div className="active-page">
       <div className="active-page__header">
@@ -88,6 +111,78 @@ export const CompletedTasksPage: React.FC = () => {
           </React.Fragment>
         ))}
         {doneTasks.length === 0 ? <div className="empty">Нет выполненных задач</div> : null}
+      </div>
+
+      <div className="active-page__header" style={{ marginTop: 24 }}>
+        <h2>Выполненные книги</h2>
+      </div>
+      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+        {books.map((b) => (
+          <div key={b.id} className="active-item">
+            <SmartImage urls={buildFallbackList('book', b.title, b.coverUrl)} alt={b.title} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 6 }} />
+            <div className="active-item__title" style={{ marginTop: 6 }}>{b.title}</div>
+            {b.comment ? <div className="active-item__desc">{b.comment}</div> : null}
+            <div className="active-item__meta">
+              {typeof b.completedAt === 'number' ? <span className="badge">⏱ {new Date(b.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span> : null}
+              <button className="tool-btn" style={{ marginLeft: 8 }} onClick={async () => { if (window.confirm('Удалить навсегда?')) { await db.books.delete(b.id); setBooks((arr) => arr.filter((x) => x.id !== b.id)); } }}>Удалить навсегда</button>
+            </div>
+          </div>
+        ))}
+        {books.length === 0 ? <div className="empty">Нет выполненных книг</div> : null}
+      </div>
+
+      <div className="active-page__header" style={{ marginTop: 24 }}>
+        <h2>Выполненные фильмы</h2>
+      </div>
+      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+        {movies.map((m) => (
+          <div key={m.id} className="active-item">
+            <SmartImage urls={buildFallbackList('movie', m.title, m.coverUrl)} alt={m.title} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 6 }} />
+            <div className="active-item__title" style={{ marginTop: 6 }}>{m.title}</div>
+            {m.comment ? <div className="active-item__desc">{m.comment}</div> : null}
+            <div className="active-item__meta">
+              {typeof m.completedAt === 'number' ? <span className="badge">⏱ {new Date(m.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span> : null}
+              <button className="tool-btn" style={{ marginLeft: 8 }} onClick={async () => { if (window.confirm('Удалить навсегда?')) { await db.movies.delete(m.id); setMovies((arr) => arr.filter((x) => x.id !== m.id)); } }}>Удалить навсегда</button>
+            </div>
+          </div>
+        ))}
+        {movies.length === 0 ? <div className="empty">Нет выполненных фильмов</div> : null}
+      </div>
+
+      <div className="active-page__header" style={{ marginTop: 24 }}>
+        <h2>Выполненные игры</h2>
+      </div>
+      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+        {games.map((g) => (
+          <div key={g.id} className="active-item">
+            <SmartImage urls={buildFallbackList('game', g.title, g.coverUrl)} alt={g.title} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 6 }} />
+            <div className="active-item__title" style={{ marginTop: 6 }}>{g.title}</div>
+            {g.comment ? <div className="active-item__desc">{g.comment}</div> : null}
+            <div className="active-item__meta">
+              {typeof g.completedAt === 'number' ? <span className="badge">⏱ {new Date(g.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span> : null}
+              <button className="tool-btn" style={{ marginLeft: 8 }} onClick={async () => { if (window.confirm('Удалить навсегда?')) { await db.games.delete(g.id); setGames((arr) => arr.filter((x) => x.id !== g.id)); } }}>Удалить навсегда</button>
+            </div>
+          </div>
+        ))}
+        {games.length === 0 ? <div className="empty">Нет выполненных игр</div> : null}
+      </div>
+
+      <div className="active-page__header" style={{ marginTop: 24 }}>
+        <h2>Выполненные покупки</h2>
+      </div>
+      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+        {purchases.map((p) => (
+          <div key={p.id} className="active-item">
+            <SmartImage urls={buildFallbackList('purchase', p.title, p.coverUrl)} alt={p.title} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 6 }} />
+            <div className="active-item__title" style={{ marginTop: 6 }}>{p.title}</div>
+            {p.comment ? <div className="active-item__desc">{p.comment}</div> : null}
+            <div className="active-item__meta">
+              {typeof p.completedAt === 'number' ? <span className="badge">⏱ {new Date(p.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span> : null}
+              <button className="tool-btn" style={{ marginLeft: 8 }} onClick={async () => { if (window.confirm('Удалить навсегда?')) { await db.purchases.delete(p.id); setPurchases((arr) => arr.filter((x) => x.id !== p.id)); } }}>Удалить навсегда</button>
+            </div>
+          </div>
+        ))}
+        {purchases.length === 0 ? <div className="empty">Нет выполненных покупок</div> : null}
       </div>
     </div>
   );

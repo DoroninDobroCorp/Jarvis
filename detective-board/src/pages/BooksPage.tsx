@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { BookItem } from '../types';
 import { getLogger } from '../logger';
+import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList } from '../imageSearch';
+import SmartImage from '../components/SmartImage';
 
 export const BooksPage: React.FC = () => {
   const log = getLogger('BooksPage');
@@ -16,14 +18,36 @@ export const BooksPage: React.FC = () => {
 
   const load = async () => {
     const all = await db.books.orderBy('createdAt').reverse().toArray();
-    setItems(all);
+    setItems(all.filter((x) => x.status !== 'done'));
   };
 
   useEffect(() => { void load(); }, []);
 
+  // On mount: try to autofill missing covers for existing items
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await db.books.toArray();
+        const missing = list.filter((b) => !b.coverUrl);
+        for (const b of missing) {
+          const url = await fetchBookCover(b.title);
+          if (url) {
+            await db.books.update(b.id, { coverUrl: url });
+          }
+        }
+        if (missing.length) {
+          await load();
+        }
+      } catch (e) {
+        log.warn('autofill_covers:error', e as Error);
+      }
+    })();
+  }, []);
+
   const fetchBookCover = async (t: string): Promise<string | undefined> => {
     try {
-      const q = encodeURIComponent(`intitle:${t}`);
+      const s = t.replace(/^(книга|book)\s+/i, '').trim();
+      const q = encodeURIComponent(`intitle:${s}`);
       const r = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1`);
       const j = await r.json();
       const vol = j.items?.[0]?.volumeInfo;
@@ -34,7 +58,17 @@ export const BooksPage: React.FC = () => {
     } catch (e) {
       log.warn('fetchBookCover:error', e as Error);
     }
-    return undefined;
+    // Fallback: try Google Custom Search Image
+    try {
+      const s = t.replace(/^(книга|book)\s+/i, '').trim();
+      const alt = await fetchFirstImageFromGoogle(`${s} book cover OR Книга ${s}`);
+      if (alt) return alt;
+    } catch (e) {
+      log.warn('fetchBookCover:google_fallback_error', e as Error);
+    }
+    // Final fallback: Unsplash Source (no key required)
+    const s = t.replace(/^(книга|book)\s+/i, '').trim();
+    return fallbackImageFromUnsplash(s);
   };
 
   const addItem = async () => {
@@ -44,7 +78,7 @@ export const BooksPage: React.FC = () => {
     try {
       const id = uuidv4();
       const coverUrl = await fetchBookCover(t);
-      const item: BookItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now() };
+      const item: BookItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now(), status: 'active' };
       await db.books.add(item);
       setTitle('');
       setComment('');
@@ -56,6 +90,12 @@ export const BooksPage: React.FC = () => {
 
   const removeItem = async (id: string) => {
     await db.books.delete(id);
+    await load();
+  };
+
+  const toggleDone = async (b: BookItem) => {
+    const done = b.status === 'done';
+    await db.books.update(b.id, done ? { status: 'active', completedAt: undefined } : { status: 'done', completedAt: Date.now() });
     await load();
   };
 
@@ -96,18 +136,25 @@ export const BooksPage: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16 }}>
         {items.map((b) => (
           <div key={b.id} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, background: '#fff' }}>
-            {b.coverUrl ? (
-              <img src={b.coverUrl} alt={b.title} style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }} />
-            ) : (
-              <div style={{ width: '100%', height: 260, background: '#f2f2f2', borderRadius: 6, marginBottom: 8, display: 'grid', placeItems: 'center' }}>Нет обложки</div>
-            )}
+            <SmartImage
+              urls={buildFallbackList('book', b.title, b.coverUrl)}
+              alt={b.title}
+              style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
+              onResolved={(url) => {
+                if (url && !url.startsWith('data:') && url !== b.coverUrl) {
+                  void db.books.update(b.id, { coverUrl: url });
+                }
+              }}
+            />
             <div style={{ fontWeight: 700, color: '#000', marginBottom: 4 }}>{b.title}</div>
             {b.comment ? <div style={{ color: '#555', marginBottom: 8 }}>{b.comment}</div> : null}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ color: '#888', fontSize: 12 }}>{new Date(b.createdAt).toLocaleDateString()}</span>
               <div style={{ display: 'inline-flex', gap: 8 }}>
+                {b.status === 'done' ? <span className="badge">✅ Выполнено</span> : null}
                 <button title="Обложка" aria-label="Обложка" onClick={() => setOpenControls((s) => ({ ...s, [b.id]: !s[b.id] }))}>🖼</button>
-                <button onClick={() => { if (confirm('Удалить книгу?')) { void removeItem(b.id); } }}>Удалить</button>
+                <button title={b.status === 'done' ? 'Вернуть' : 'Выполнено'} aria-label={b.status === 'done' ? 'Вернуть' : 'Выполнено'} onClick={() => { void toggleDone(b); }}>{b.status === 'done' ? '↩️' : '✅'}</button>
+                <button title="Удалить" aria-label="Удалить" onClick={() => { if (confirm('Удалить книгу?')) { void removeItem(b.id); } }}>🗑️</button>
               </div>
             </div>
             {openControls[b.id] ? (
