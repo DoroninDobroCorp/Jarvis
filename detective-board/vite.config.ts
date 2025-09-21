@@ -129,12 +129,7 @@ export default defineConfig(({ mode }) => {
         server.middlewares.use('/api/openai/text', async (req, res) => {
           if (req.method !== 'POST') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
           try {
-            const apiKey = OPENAI_API_KEY;
-            if (!apiKey) {
-              res.statusCode = 500; res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: 'OPENAI_API_KEY is not set on server' }));
-              return;
-            }
+            // Read body first to support local test stubs without requiring API key
             const chunks: Uint8Array[] = [];
             req.on('data', (c: Uint8Array) => chunks.push(c));
             await new Promise<void>((resolve) => req.on('end', () => resolve()));
@@ -156,6 +151,13 @@ export default defineConfig(({ mode }) => {
               res.statusCode = 200;
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({ text, model: textModel, stub: true }));
+              return;
+            }
+
+            const apiKey = OPENAI_API_KEY;
+            if (!apiKey) {
+              res.statusCode = 500; res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'OPENAI_API_KEY is not set on server' }));
               return;
             }
 

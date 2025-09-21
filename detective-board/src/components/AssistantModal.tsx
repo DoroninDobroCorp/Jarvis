@@ -319,11 +319,11 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
         // Fallback: call dev-only text endpoint
         const providerLabel = textProvider === 'google' ? 'Google' : 'OpenAI';
         setStatus(`Отправка запроса (${providerLabel})...`);
-        try {
-          const backup = await getBackupData();
-          const wb = getSnapshot();
-          const context = `Профиль (Сохранённая информация):\n${savedInfo}\n\nСамооценки (сводка): ${JSON.stringify(wb)}\n\nЗадачи и связи (backup JSON):\n${JSON.stringify(backup)}`;
-          const endpoint = textProvider === 'google' ? '/api/google/text' : '/api/openai/text';
+        const backup = await getBackupData();
+        const wb = getSnapshot();
+        const context = `Профиль (Сохранённая информация):\n${savedInfo}\n\nСамооценки (сводка): ${JSON.stringify(wb)}\n\nЗадачи и связи (backup JSON):\n${JSON.stringify(backup)}`;
+
+        const doRequest = async (endpoint: string, label: string) => {
           const resp = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -331,19 +331,34 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
           });
           const json = await resp.json();
           if (!resp.ok) {
-            throw new Error(typeof json?.error === 'string' ? json.error : 'request_failed');
+            const errMsg = typeof (json as any)?.error === 'string' ? (json as any).error : 'request_failed';
+            throw new Error(errMsg);
           }
-          const reply = (json?.text as string) || '';
+          const reply = (json as any)?.text as string || '';
+          const usedModel = (json as any)?.model as string || 'unknown';
           if (reply) setMessages((arr) => [...arr, { role: 'assistant', text: reply }]);
-          const usedModel = (json?.model as string) || 'unknown';
-          setStatus(reply ? `Ответ получен (${providerLabel}${usedModel ? `: ${usedModel}` : ''})` : 'Пустой ответ');
-          // Try to extract SAVE_JSON from reply
-          if (reply) {
-            reply.split('\n').forEach((line) => applySaveJsonPatchLine(line));
-          }
+          setStatus(reply ? `Ответ получен (${label}${usedModel ? `: ${usedModel}` : ''})` : 'Пустой ответ');
+          if (reply) reply.split('\n').forEach((line) => applySaveJsonPatchLine(line));
+        };
+
+        try {
+          const endpoint = textProvider === 'google' ? '/api/google/text' : '/api/openai/text';
+          await doRequest(endpoint, providerLabel);
         } catch (e) {
           console.error(e);
-          setStatus(textProvider === 'google' ? 'Ошибка запроса к Google API — попробуйте переключить провайдера' : 'Ошибка текстового запроса');
+          if (textProvider === 'google') {
+            // Auto-switch to OpenAI and retry once
+            setStatus('Ошибка запроса к Google API — переключаюсь на OpenAI и повторяю...');
+            try { setTextProvider('openai'); } catch {}
+            try {
+              await doRequest('/api/openai/text', 'OpenAI');
+            } catch (e2) {
+              console.error(e2);
+              setStatus('Ошибка текстового запроса');
+            }
+          } else {
+            setStatus('Ошибка текстового запроса');
+          }
         }
         return;
       }

@@ -80,3 +80,6 @@ export default tseslint.config([
   },
 ])
 ```
+
+
+ИИ-ассистент пока не работает
