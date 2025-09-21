@@ -13,7 +13,15 @@ import { getLogger } from './logger';
 import { DiagPage } from './pages/DiagPage';
 import { CompletedTasksPage } from './pages/CompletedTasksPage';
 import { PurchasesPage } from './pages/PurchasesPage';
+import AchievementsPage from './pages/AchievementsPage';
 import WellbeingManager from './components/WellbeingManager';
+import GamificationManager from './components/GamificationManager';
+
+declare global {
+  interface Window {
+    __appStore?: typeof useAppStore;
+  }
+}
 
 function BoardPage() {
   return (
@@ -33,9 +41,11 @@ function App() {
     // Expose store for e2e tests (dev only)
     try {
       if (import.meta.env.DEV) {
-        (window as any).__appStore = useAppStore;
+        window.__appStore = useAppStore;
       }
-    } catch {}
+    } catch (err) {
+      log.warn('app:expose-store-failed', { error: err instanceof Error ? err.message : String(err) });
+    }
   }, []);
   useEffect(() => {
     if (!initialized) {
@@ -50,6 +60,7 @@ function App() {
   return (
     <>
       <WellbeingManager />
+      <GamificationManager />
       <Routes>
         <Route path="/" element={<BoardPage />} />
         <Route path="/active" element={<ActiveTasksPage />} />
@@ -58,6 +69,7 @@ function App() {
         <Route path="/movies" element={<MoviesPage />} />
         <Route path="/games" element={<GamesPage />} />
         <Route path="/purchases" element={<PurchasesPage />} />
+        <Route path="/achievements" element={<AchievementsPage />} />
         <Route path="/diag" element={<DiagPage />} />
       </Routes>
     </>

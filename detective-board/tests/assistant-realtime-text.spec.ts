@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect } from '@playwright/test';
 
 // Тест открывает ассистента, переключает его в текстовый режим и эмулирует

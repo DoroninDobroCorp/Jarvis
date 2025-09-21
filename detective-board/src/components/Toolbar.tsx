@@ -2,8 +2,9 @@ import React, { useRef, useState } from 'react';
 import { useAppStore } from '../store';
 import { Link, useNavigate } from 'react-router-dom';
 import { getLogger } from '../logger';
-import { exportBackup, importBackup } from '../exportImport';
+import { exportBackup, exportAssistantContext, importBackup } from '../exportImport';
 import AssistantModal from './AssistantModal';
+import { useGamificationStore, progressWithinLevel } from '../gamification';
 
 const log = getLogger('Toolbar');
 
@@ -38,6 +39,11 @@ export const Toolbar: React.FC = () => {
   const [importMode, setImportMode] = useState<'replace' | 'merge'>('replace');
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const level = useGamificationStore((s) => s.level);
+  const levelTitles = useGamificationStore((s) => s.levelTitles);
+  const xp = useGamificationStore((s) => s.xp);
+  const progress = progressWithinLevel(xp, level);
+  const levelLabel = levelTitles[level]?.title || `Уровень ${level}`;
   const onPickFile = (mode: 'replace' | 'merge') => {
     setImportMode(mode);
     fileRef.current?.click();
@@ -99,6 +105,9 @@ export const Toolbar: React.FC = () => {
         <ToolButton active={tool === 'add-person-partner'} onClick={() => { log.debug('setTool', { to: 'add-person-partner' }); toggle('add-person-partner'); }} title="Добавить партнёра">🤝</ToolButton>
         <ToolButton active={tool === 'add-person-bot'} onClick={() => { log.debug('setTool', { to: 'add-person-bot' }); toggle('add-person-bot'); }} title="Добавить бота">🤖</ToolButton>
         <ToolButton active={tool === 'link'} onClick={() => { log.debug('setTool', { to: 'link' }); toggle('link'); }} title="Соединить ниткой">🧵</ToolButton>
+        <div style={{ marginLeft: 12, fontSize: 12, color: 'var(--text)' }} title={`Прогресс уровня: ${progress.current}/${progress.required}`}>
+          ⭐ {levelLabel}
+        </div>
       </div>
       <div className="tool-group">
         <ToolButton onClick={() => { log.info('assistant:open'); setAssistantOpen(true); }} title="ИИ-ассистент (аудио)">🤖 Ассистент</ToolButton>
@@ -116,6 +125,7 @@ export const Toolbar: React.FC = () => {
             <option value="/movies">Фильмы</option>
             <option value="/games">Игры</option>
             <option value="/purchases">Покупки</option>
+            <option value="/achievements">Достижения</option>
           </select>
         </div>
         <div style={{ marginLeft: 12 }}>
@@ -139,6 +149,7 @@ export const Toolbar: React.FC = () => {
           <button className="tool-btn" title="Очистить всю базу" onClick={() => { if (confirm('Очистить все данные? Это действие необратимо.')) { void resetAll(); } }}>🗑 Очистить всё</button>
           <span style={{ width: 8 }} />
           <button className="tool-btn" title="Экспорт в JSON" onClick={() => { log.info('export:click'); void exportBackup(); }}>⤓ Экспорт</button>
+          <button className="tool-btn" title="Экспортировать контекст ассистента" onClick={() => { log.info('export:assistant-context'); void exportAssistantContext(); }}>⤓ Контекст ассистента</button>
           <div style={{ position: 'relative', display: 'inline-block' }}>
             <button className="tool-btn" title="Импорт / Ещё" onClick={() => setImportMenuOpen((v) => !v)}>☰ Импорт/Ещё</button>
             {importMenuOpen ? (

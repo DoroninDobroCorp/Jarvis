@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { test, expect } from '@playwright/test';
 
 // Тест проверяет применение SAVE_JSON через текстовый режим в демо-окружении

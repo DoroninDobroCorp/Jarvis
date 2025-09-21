@@ -2,6 +2,8 @@ import { db } from './db';
 import { getLogger } from './logger';
 import type { AnyNode, LinkThread, User, BookItem, MovieItem, GameItem, PurchaseItem } from './types';
 import { useAppStore } from './store';
+import { buildAssistantContext, type AssistantContextData } from './assistant/context';
+import { loadMessages, loadPrompt, loadSavedInfo, todayKey } from './assistant/storage';
 
 export type BackupData = {
   $schema?: string;
@@ -141,5 +143,36 @@ export async function importBackup(file: File, mode: 'replace' | 'merge' = 'repl
       currentParentId: s.currentParentId,
     }));
     log.info('import:merge:done', { nodes: nodes.length, links: links.length, users: users.length, books: books.length, movies: movies.length, games: games.length, purchases: purchases.length });
+  }
+}
+
+export interface AssistantExportData extends AssistantContextData {
+  exportedAt: string;
+}
+
+export async function getAssistantExportData(): Promise<AssistantExportData> {
+  const dayKey = todayKey();
+  const history = loadMessages(dayKey);
+  const savedInfo = loadSavedInfo();
+  const prompt = loadPrompt();
+  const context = await buildAssistantContext({ savedInfo, prompt, messages: history });
+  return { ...context, exportedAt: new Date().toISOString() };
+}
+
+export async function exportAssistantContext(): Promise<void> {
+  const data = await getAssistantExportData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const filename = `assistant-context-${data.generatedAt.replace(/[:]/g, '-')}.json`;
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    log.info('export:assistant-context', { tasks: data.activeTasks.length, history: data.history.length });
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }

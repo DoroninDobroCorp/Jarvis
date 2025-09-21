@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { defineConfig, type Plugin, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
