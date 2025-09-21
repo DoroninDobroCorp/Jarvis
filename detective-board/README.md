@@ -1,5 +1,18 @@
 # React + TypeScript + Vite
 
+## Assistant configuration
+
+The built-in assistant supports Google Gemini (default for текстовый чат) and OpenAI. Configure the following environment variables before starting the dev server:
+
+- `GOOGLE_API_KEY` — ключ доступа к Google Generative Language API (Gemini).
+- `GOOGLE_TEXT_MODEL` *(опционально)* — идентификатор модели Gemini для текстового чата (по умолчанию `gemini-1.5-flash-latest`).
+- `OPENAI_API_KEY` — ключ OpenAI, используется для голосового режима и текстового чата при выборе OpenAI.
+- `OPENAI_TEXT_MODEL` *(опционально)* — модель OpenAI для текстового режима (по умолчанию `gpt-4o-mini`).
+
+Секретные ключи не коммитим в репозиторий. Поместите их, например, в `.env.local`.
+
+---
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
@@ -67,3 +80,6 @@ export default tseslint.config([
   },
 ])
 ```
+
+
+ИИ-ассистент пока не работает
