@@ -11,6 +11,8 @@ import { extractAssistantText } from '../assistant/api';
 interface QueueItem {
   task: TaskPathInfo;
   completedAt: number;
+  source: 'task' | 'manual';
+  manualId?: string;
 }
 
 const difficultyPresets: Array<{ key: Difficulty; label: string; xp: number }> = [
@@ -127,6 +129,8 @@ const GamificationManager: React.FC = () => {
   const assignLevelTitle = useGamificationStore((s) => s.assignLevelTitle);
   const clearLevelUpEvent = useGamificationStore((s) => s.clearLevelUpEvent);
   const levelTitles = useGamificationStore((s) => s.levelTitles);
+  const manualCandidates = useGamificationStore((s) => s.pendingManualCandidates);
+  const removeManualCompletion = useGamificationStore((s) => s.removeManualCompletion);
 
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [xpValue, setXpValue] = useState(300);
@@ -139,23 +143,55 @@ const GamificationManager: React.FC = () => {
 
   useEffect(() => {
     const map = buildNodeMap(nodes);
-    const items: QueueItem[] = [];
-    for (const node of nodes) {
-      if (!isTaskNode(node)) continue;
-      if (node.status !== 'done') continue;
-      if (node.isActual === false) continue;
-      if (processedTasks[node.id]) continue;
-      const info = summarizeTask(node, map);
-      items.push({ task: info, completedAt: node.completedAt ?? Date.now() });
-    }
-    if (items.length) {
-      setQueue((prev) => {
-        const existing = new Set(prev.map((item) => item.task.id));
-        const additions = items.filter((item) => !existing.has(item.task.id));
-        return additions.length ? [...prev, ...additions] : prev;
+    const manualIds = new Set(manualCandidates.map((c) => c.id));
+
+    setQueue((prev) => {
+      const filteredPrev = prev.filter((item) => {
+        if (item.source === 'manual') {
+          return item.manualId ? manualIds.has(item.manualId) : false;
+        }
+        const node = map.get(item.task.id);
+        if (!node || !isTaskNode(node)) return false;
+        if (node.status !== 'done') return false;
+        if (node.isActual === false) return false;
+        if (processedTasks[node.id]) return false;
+        return true;
       });
-    }
-  }, [nodes, processedTasks]);
+
+      const existingKeys = new Set(
+        filteredPrev.map((item) => (item.source === 'manual' ? `manual:${item.manualId}` : `task:${item.task.id}`))
+      );
+
+      const additions: QueueItem[] = [];
+
+      for (const node of nodes) {
+        if (!isTaskNode(node)) continue;
+        if (node.status !== 'done') continue;
+        if (node.isActual === false) continue;
+        if (processedTasks[node.id]) continue;
+        const key = `task:${node.id}`;
+        if (existingKeys.has(key)) continue;
+        const info = summarizeTask(node, map);
+        additions.push({ task: info, completedAt: node.completedAt ?? Date.now(), source: 'task' });
+      }
+
+      manualCandidates.forEach((candidate) => {
+        const key = `manual:${candidate.id}`;
+        if (existingKeys.has(key)) return;
+        additions.push({
+          task: candidate.info,
+          completedAt: candidate.completedAt,
+          source: 'manual',
+          manualId: candidate.id,
+        });
+      });
+
+      if (additions.length === 0) {
+        return filteredPrev;
+      }
+      return [...filteredPrev, ...additions].sort((a, b) => b.completedAt - a.completedAt);
+    });
+  }, [nodes, processedTasks, manualCandidates]);
 
   useEffect(() => {
     if (!levelModal && pendingLevelUps.length > 0) {
@@ -195,16 +231,29 @@ const GamificationManager: React.FC = () => {
     setNote('');
   }, [currentItem?.task.id]);
 
-  function markProcessed(taskId: string) {
-    ignoreTaskCompletion(taskId);
-    setQueue((prev) => prev.filter((item) => item.task.id !== taskId));
+  const keyForItem = (item: QueueItem) => (
+    item.source === 'manual' ? `manual:${item.manualId}` : `task:${item.task.id}`
+  );
+
+  function markProcessed(item: QueueItem) {
+    if (item.source === 'task') {
+      ignoreTaskCompletion(item.task.id);
+    } else if (item.source === 'manual' && item.manualId) {
+      removeManualCompletion(item.manualId);
+    }
+    const targetKey = keyForItem(item);
+    setQueue((prev) => prev.filter((entry) => keyForItem(entry) !== targetKey));
   }
 
   function submitXp() {
     if (!currentItem) return;
     const amount = clampXp(xpValue);
     registerTaskCompletion(currentItem.task, amount, difficulty, note.trim() || undefined, currentItem.completedAt);
-    setQueue((prev) => prev.filter((item) => item.task.id !== currentItem.task.id));
+    if (currentItem.source === 'manual' && currentItem.manualId) {
+      removeManualCompletion(currentItem.manualId);
+    }
+    const targetKey = keyForItem(currentItem);
+    setQueue((prev) => prev.filter((item) => keyForItem(item) !== targetKey));
   }
 
   function closeLevelModal() {
@@ -266,7 +315,7 @@ const GamificationManager: React.FC = () => {
               <textarea value={note} onChange={(e) => setNote(e.target.value)} style={{ width: '100%', minHeight: 60, marginTop: 4 }} />
             </label>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
-              <button className="tool-btn" onClick={() => markProcessed(currentItem.task.id)}>Пропустить</button>
+              <button className="tool-btn" onClick={() => markProcessed(currentItem)}>Пропустить</button>
               <button className="tool-btn" onClick={submitXp}>Начислить</button>
             </div>
           </div>
@@ -322,4 +371,3 @@ const GamificationManager: React.FC = () => {
 };
 
 export default GamificationManager;
-

@@ -7,6 +7,8 @@ import { getLogger } from '../logger';
 import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
+import { useGamificationStore } from '../gamification';
+import type { TaskPathInfo } from '../taskUtils';
 
 export const MoviesPage: React.FC = () => {
   const log = getLogger('MoviesPage');
@@ -16,6 +18,22 @@ export const MoviesPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [urlEdits, setUrlEdits] = useState<Record<string, string>>({});
   const [openControls, setOpenControls] = useState<Record<string, boolean>>({});
+  const enqueueManualCompletion = useGamificationStore((s) => s.enqueueManualCompletion);
+  const removeManualCompletion = useGamificationStore((s) => s.removeManualCompletion);
+
+  const buildCompletionId = (itemId: string, completedAt: number) => `movie:${itemId}:${completedAt}`;
+
+  const buildCompletionInfo = (item: MovieItem, completionId: string): TaskPathInfo => ({
+    id: completionId,
+    title: item.title,
+    status: 'done',
+    dueDate: undefined,
+    isActual: true,
+    description: item.comment,
+    priority: undefined,
+    parentPath: ['Фильмы'],
+    iconEmoji: '🎬',
+  });
 
   const load = async () => {
     const all = await db.movies.orderBy('createdAt').reverse().toArray();
@@ -96,7 +114,18 @@ export const MoviesPage: React.FC = () => {
 
   const toggleDone = async (m: MovieItem) => {
     const done = m.status === 'done';
-    await db.movies.update(m.id, done ? { status: 'active', completedAt: undefined } : { status: 'done', completedAt: Date.now() });
+    if (done) {
+      await db.movies.update(m.id, { status: 'active', completedAt: undefined });
+      if (typeof m.completedAt === 'number') {
+        removeManualCompletion(buildCompletionId(m.id, m.completedAt));
+      }
+    } else {
+      const completedAt = Date.now();
+      await db.movies.update(m.id, { status: 'done', completedAt });
+      const completionId = buildCompletionId(m.id, completedAt);
+      const info = buildCompletionInfo(m, completionId);
+      enqueueManualCompletion({ id: completionId, info, completedAt });
+    }
     await load();
   };
 

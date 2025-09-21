@@ -7,6 +7,8 @@ import { getLogger } from '../logger';
 import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
+import { useGamificationStore } from '../gamification';
+import type { TaskPathInfo } from '../taskUtils';
 
 export const PurchasesPage: React.FC = () => {
   const log = getLogger('PurchasesPage');
@@ -16,6 +18,22 @@ export const PurchasesPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [urlEdits, setUrlEdits] = useState<Record<string, string>>({});
   const [openControls, setOpenControls] = useState<Record<string, boolean>>({});
+  const enqueueManualCompletion = useGamificationStore((s) => s.enqueueManualCompletion);
+  const removeManualCompletion = useGamificationStore((s) => s.removeManualCompletion);
+
+  const buildCompletionId = (itemId: string, completedAt: number) => `purchase:${itemId}:${completedAt}`;
+
+  const buildCompletionInfo = (item: PurchaseItem, completionId: string): TaskPathInfo => ({
+    id: completionId,
+    title: item.title,
+    status: 'done',
+    dueDate: undefined,
+    isActual: true,
+    description: item.comment,
+    priority: undefined,
+    parentPath: ['Покупки'],
+    iconEmoji: '🛍️',
+  });
 
   const load = async () => {
     const all = await db.purchases.orderBy('createdAt').reverse().toArray();
@@ -80,7 +98,18 @@ export const PurchasesPage: React.FC = () => {
 
   const toggleDone = async (p: PurchaseItem) => {
     const done = p.status === 'done';
-    await db.purchases.update(p.id, done ? { status: 'active', completedAt: undefined } : { status: 'done', completedAt: Date.now() });
+    if (done) {
+      await db.purchases.update(p.id, { status: 'active', completedAt: undefined });
+      if (typeof p.completedAt === 'number') {
+        removeManualCompletion(buildCompletionId(p.id, p.completedAt));
+      }
+    } else {
+      const completedAt = Date.now();
+      await db.purchases.update(p.id, { status: 'done', completedAt });
+      const completionId = buildCompletionId(p.id, completedAt);
+      const info = buildCompletionInfo(p, completionId);
+      enqueueManualCompletion({ id: completionId, info, completedAt });
+    }
     await load();
   };
 

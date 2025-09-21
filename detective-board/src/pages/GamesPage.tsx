@@ -7,6 +7,8 @@ import { getLogger } from '../logger';
 import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
+import { useGamificationStore } from '../gamification';
+import type { TaskPathInfo } from '../taskUtils';
 
 export const GamesPage: React.FC = () => {
   const log = getLogger('GamesPage');
@@ -16,6 +18,22 @@ export const GamesPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [urlEdits, setUrlEdits] = useState<Record<string, string>>({});
   const [openControls, setOpenControls] = useState<Record<string, boolean>>({});
+  const enqueueManualCompletion = useGamificationStore((s) => s.enqueueManualCompletion);
+  const removeManualCompletion = useGamificationStore((s) => s.removeManualCompletion);
+
+  const buildCompletionId = (itemId: string, completedAt: number) => `game:${itemId}:${completedAt}`;
+
+  const buildCompletionInfo = (item: GameItem, completionId: string): TaskPathInfo => ({
+    id: completionId,
+    title: item.title,
+    status: 'done',
+    dueDate: undefined,
+    isActual: true,
+    description: item.comment,
+    priority: undefined,
+    parentPath: ['Игры'],
+    iconEmoji: '🎮',
+  });
 
   const load = async () => {
     const all = await db.games.orderBy('createdAt').reverse().toArray();
@@ -96,7 +114,18 @@ export const GamesPage: React.FC = () => {
 
   const toggleDone = async (g: GameItem) => {
     const done = g.status === 'done';
-    await db.games.update(g.id, done ? { status: 'active', completedAt: undefined } : { status: 'done', completedAt: Date.now() });
+    if (done) {
+      await db.games.update(g.id, { status: 'active', completedAt: undefined });
+      if (typeof g.completedAt === 'number') {
+        removeManualCompletion(buildCompletionId(g.id, g.completedAt));
+      }
+    } else {
+      const completedAt = Date.now();
+      await db.games.update(g.id, { status: 'done', completedAt });
+      const completionId = buildCompletionId(g.id, completedAt);
+      const info = buildCompletionInfo(g, completionId);
+      enqueueManualCompletion({ id: completionId, info, completedAt });
+    }
     await load();
   };
 

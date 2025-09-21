@@ -24,6 +24,12 @@ export interface XPEntry {
   ts: number;
 }
 
+export interface ManualCompletionCandidate {
+  id: string;
+  info: TaskPathInfo;
+  completedAt: number;
+}
+
 export interface LevelUpEvent {
   level: number;
   totalXp: number;
@@ -61,6 +67,7 @@ export interface GamificationState {
   levelTitles: Record<number, LevelTitleInfo>;
   claimedBonuses: Record<string, ClaimedBonusInfo>;
   pendingLevelUps: LevelUpEvent[];
+  pendingManualCandidates: ManualCompletionCandidate[];
   registerTaskCompletion: (info: TaskPathInfo, xp: number, difficulty: Difficulty, note?: string, completedAt?: number) => void;
   ignoreTaskCompletion: (taskId: string) => void;
   addXp: (entry: { amount: number; source: XpSource; note?: string; taskId?: string; achievementId?: string; ts?: number }) => void;
@@ -70,6 +77,8 @@ export interface GamificationState {
   updateAchievement: (achievement: Achievement) => void;
   removeAchievement: (id: string) => void;
   markBonusClaimed: (dateKey: string, xp: number) => void;
+  enqueueManualCompletion: (candidate: ManualCompletionCandidate) => void;
+  removeManualCompletion: (id: string) => void;
 }
 
 const memoryStorage: StateStorage = {
@@ -86,8 +95,11 @@ const storage = createJSONStorage(() => {
 });
 
 function xpRequiredForNext(level: number): number {
+  // Slightly increased difficulty (v2): ~+12% to next-level thresholds
   const base = 250;
-  return Math.max(150, Math.round(base * Math.pow(Math.max(level, 1), 1.35) + 180));
+  const scale = 1.12; // keep it subtle
+  const core = base * Math.pow(Math.max(level, 1), 1.35) + 180;
+  return Math.max(150, Math.round(core * scale));
 }
 
 export function totalXpForLevel(level: number): number {
@@ -134,6 +146,7 @@ export const useGamificationStore = create<GamificationState>()(
       levelTitles: { 1: { title: 'Новичок', assignedAt: Date.now() } },
       claimedBonuses: {},
       pendingLevelUps: [],
+      pendingManualCandidates: [],
       registerTaskCompletion: (info, amount, difficulty, note, completedAt) => {
         const xp = clampXp(amount);
         const summary: TaskCompletionSummary = {
@@ -233,6 +246,19 @@ export const useGamificationStore = create<GamificationState>()(
           get().addXp({ amount: bonusXp, source: 'bonus', note: `Бонус за ${dateKey}` });
         }
       },
+      enqueueManualCompletion: (candidate) => {
+        set((state) => {
+          if (state.pendingManualCandidates.some((c) => c.id === candidate.id)) {
+            return {};
+          }
+          return { pendingManualCandidates: [...state.pendingManualCandidates, candidate] };
+        });
+      },
+      removeManualCompletion: (id) => {
+        set((state) => ({
+          pendingManualCandidates: state.pendingManualCandidates.filter((c) => c.id !== id),
+        }));
+      },
     }),
     {
       name: 'GAMIFICATION_STATE_V1',
@@ -247,8 +273,8 @@ export const useGamificationStore = create<GamificationState>()(
         levelTitles: state.levelTitles,
         claimedBonuses: state.claimedBonuses,
         pendingLevelUps: state.pendingLevelUps,
+        pendingManualCandidates: state.pendingManualCandidates,
       }),
     }
   )
 );
-
