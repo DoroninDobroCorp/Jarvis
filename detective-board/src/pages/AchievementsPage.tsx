@@ -7,6 +7,7 @@ import {
 import { getSnapshot, ymd } from '../wellbeing';
 import { extractAssistantText } from '../assistant/api';
 import type { Achievement } from '../gamification';
+import ExtrasSwitcher from '../components/ExtrasSwitcher';
 
 function escapeXml(str: string): string {
   return str
@@ -198,9 +199,12 @@ const AchievementsPage: React.FC = () => {
 
   return (
     <div className="achievements-page" style={{ padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Link to="/" className="tool-link">← Назад к доске</Link>
-        <h2>Достижения и опыт</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Link to="/" className="tool-link">← Назад к доске</Link>
+          <h2 style={{ margin: 0 }}>Достижения и опыт</h2>
+        </div>
+        <ExtrasSwitcher />
       </div>
       <section style={{ marginBottom: 32, background: '#10181f', padding: 16, borderRadius: 12, border: '1px solid #1f2b34' }}>
         <div style={{ fontSize: 20, fontWeight: 600 }}>Уровень {level}</div>

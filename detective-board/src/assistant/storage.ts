@@ -57,12 +57,13 @@ export function savePrompt(value: string): void {
 }
 
 export function loadTextProvider(): 'openai' | 'google' {
-  if (typeof localStorage === 'undefined') return 'openai';
+  if (typeof localStorage === 'undefined') return 'google';
   try {
     const raw = localStorage.getItem(TEXT_PROVIDER_KEY);
     if (raw === 'google') return 'google';
+    if (raw === 'openai') return 'openai';
   } catch {}
-  return 'openai';
+  return 'google';
 }
 
 export function saveTextProvider(provider: 'openai' | 'google'): void {

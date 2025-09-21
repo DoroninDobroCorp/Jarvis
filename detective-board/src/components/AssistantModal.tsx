@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { getLogger } from '../logger';
 import {
   appendMessage,
@@ -59,6 +60,13 @@ type Mode = 'voice' | 'text';
 
 type TextProvider = 'openai' | 'google';
 
+interface StatusEntry {
+  id: string;
+  text: string;
+  kind: 'info' | 'error' | 'success';
+  ts: number;
+}
+
 export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const dayKey = useMemo(() => todayKey(), []);
   const [tab, setTab] = useState<AssistantTab>('chat');
@@ -68,16 +76,28 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
   const [savedInfo, setSavedInfo] = useState<string>(() => loadSavedInfo());
   const [messages, setMessages] = useState<AssistantMessage[]>(() => loadMessages(dayKey));
   const [inputText, setInputText] = useState('');
-  const [status, setStatus] = useState('Ожидание подключения');
+  const [status, setStatus] = useState('Окно ассистента неактивно');
   const [textReady, setTextReady] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [voiceConnected, setVoiceConnected] = useState(false);
   const [suggestedContextCount, setSuggestedContextCount] = useState<number | null>(null);
+  const [statusMessages, setStatusMessages] = useState<StatusEntry[]>([]);
   const autoConnectRef = useRef(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const voiceRef = useRef<VoiceConnectionHandle | null>(null);
   const voiceDemoTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const pushStatus = useCallback(
+    (text: string, kind: StatusEntry['kind'] = 'info') => {
+      setStatus(text);
+      setStatusMessages((prev) => {
+        const entry: StatusEntry = { id: uuidv4(), text, kind, ts: Date.now() };
+        return [...prev.slice(-8), entry];
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     saveMode(mode);
@@ -101,34 +121,46 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
 
   const connectText = useCallback(async (auto = false) => {
     if (!open) return;
-    const label = auto ? 'Автоподключение текстового режима…' : 'Подключение текстового режима…';
+    const phase = auto ? 'Автоподготовка' : 'Подготовка';
     try {
       setIsConnecting(true);
-      setStatus(label);
+      pushStatus(`${phase} контекста для Google…`);
       const context = await buildAssistantContext({ savedInfo, prompt, messages });
       setSuggestedContextCount(context.activeTasks.length);
       setTextReady(true);
-      setStatus(`Текстовый режим готов (${context.activeTasks.length} задач в контексте)`);
+      pushStatus(`Контекст готов: ${context.activeTasks.length} актуальных задач.`, 'success');
       log.info('assistant:text:connected', { tasks: context.activeTasks.length, auto });
     } catch (e) {
       log.error('assistant:text:connect_failed', e);
       setTextReady(false);
-      setStatus('Не удалось подготовить контекст');
+      const message = e instanceof Error ? e.message : String(e);
+      pushStatus(`Не удалось подготовить контекст: ${message}`, 'error');
     } finally {
       setIsConnecting(false);
     }
-  }, [open, savedInfo, prompt, messages]);
+  }, [open, savedInfo, prompt, messages, pushStatus]);
 
   useEffect(() => {
     if (!open) {
       autoConnectRef.current = false;
+      setStatus('Окно ассистента неактивно');
+      setStatusMessages([]);
       return;
     }
-    if (!autoConnectRef.current && mode === 'text') {
+    if (!autoConnectRef.current) {
+      if (mode !== 'text') {
+        setMode('text');
+        return;
+      }
+      if (textProvider !== 'google') {
+        setTextProvider('google');
+        return;
+      }
       autoConnectRef.current = true;
+      pushStatus('Открыто окно ассистента. Готовлю контекст Google…');
       void connectText(true);
     }
-  }, [open, mode, connectText]);
+  }, [open, mode, textProvider, connectText, pushStatus]);
 
   useEffect(() => {
     if (!open && voiceRef.current) {
@@ -160,14 +192,14 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
     if (voiceConnected) return;
     try {
       setIsConnecting(true);
-      setStatus('Подключаю голосовой режим…');
+      pushStatus('Подключаю голосовой режим…');
       const resp = await fetch('/api/openai/rt/token', { method: 'POST' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       // Даже если токен демо, считаем успехом
       const json = await resp.json().catch(() => ({}));
       log.info('assistant:voice:token', json);
       setVoiceConnected(true);
-      setStatus('Голосовой режим подключён (демо)');
+      pushStatus('Голосовой режим подключён (демо).', 'success');
       const handle: VoiceConnectionHandle = {
         disconnect: () => {
           if (voiceDemoTimeoutRef.current) {
@@ -175,7 +207,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
             voiceDemoTimeoutRef.current = null;
           }
           setVoiceConnected(false);
-          setStatus('Голосовой режим отключён');
+          pushStatus('Голосовой режим отключён.');
         },
       };
       voiceRef.current = handle;
@@ -185,7 +217,8 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
       }, 1200);
     } catch (e) {
       log.error('assistant:voice:connect_failed', e);
-      setStatus('Не удалось подключиться к голосовому режиму');
+      const message = e instanceof Error ? e.message : String(e);
+      pushStatus(`Не удалось подключиться к голосовому режиму: ${message}`, 'error');
     } finally {
       setIsConnecting(false);
     }
@@ -200,7 +233,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
 
   async function sendUserText() {
     if (!textReady) {
-      setStatus('Текстовый режим ещё не готов');
+      pushStatus('Текстовый режим ещё не готов.', 'error');
       return;
     }
     const trimmed = inputText.trim();
@@ -212,7 +245,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
 
     const doRequest = async (endpoint: string, providerLabel: string) => {
       setIsSending(true);
-      setStatus(`Отправка запроса (${providerLabel})…`);
+      pushStatus(`Отправка запроса (${providerLabel})…`);
       try {
         const context = await buildAssistantContext({ savedInfo, prompt: instructions, messages: nextMessages });
         setSuggestedContextCount(context.activeTasks.length);
@@ -255,13 +288,10 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
             setSavedInfo(updatedInfo);
           }
           const patchSuffix = appliedPatch ? ' + SAVE_JSON' : '';
-          if (model) {
-            setStatus(`Ответ получен (${providerLabel}${model ? `: ${model}` : ''})${patchSuffix}`);
-          } else {
-            setStatus(`Ответ получен (${providerLabel})${patchSuffix}`);
-          }
+          const modelLabel = model ? `: ${model}` : '';
+          pushStatus(`Ответ получен (${providerLabel}${modelLabel})${patchSuffix}`, 'success');
         } else {
-          setStatus('Пустой ответ ассистента');
+          pushStatus('Пустой ответ ассистента.', 'error');
         }
       } finally {
         setIsSending(false);
@@ -275,15 +305,18 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
     } catch (err) {
       log.error('assistant:text:request_failed', err);
       if (textProvider === 'google') {
-        setStatus('Ошибка запроса к Google API — переключаюсь на OpenAI и повторяю…');
+        const message = err instanceof Error ? err.message : String(err);
+        pushStatus(`Ошибка запроса к Google API (${message}) — пробую OpenAI…`, 'error');
         try {
           await doRequest('/api/openai/text', 'OpenAI');
         } catch (err2) {
           log.error('assistant:text:fallback_failed', err2);
-          setStatus('Ошибка текстового запроса');
+          const fallbackMessage = err2 instanceof Error ? err2.message : String(err2);
+          pushStatus(`Ошибка текстового запроса: ${fallbackMessage}`, 'error');
         }
       } else {
-        setStatus('Ошибка текстового запроса');
+        const message = err instanceof Error ? err.message : String(err);
+        pushStatus(`Ошибка текстового запроса: ${message}`, 'error');
       }
     }
   }
@@ -292,6 +325,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
     resetMessages(dayKey);
     setMessages([]);
     log.info('assistant:history:cleared');
+    pushStatus('История диалога очищена.');
   }
 
   function onCloseClick() {
@@ -326,8 +360,20 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
         zIndex: 2000,
       }}
     >
-      <div style={{ width: 720, maxHeight: '90vh', background: '#0f1418', color: '#f5f5f5', borderRadius: 14, border: '1px solid #1e2a33', boxShadow: '0 18px 64px rgba(0,0,0,0.55)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #1f2b34', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div
+        style={{
+          width: 'min(1120px, 94vw)',
+          height: '90vh',
+          background: '#0f1418',
+          color: '#f5f5f5',
+          borderRadius: 18,
+          border: '1px solid #1e2a33',
+          boxShadow: '0 24px 72px rgba(0,0,0,0.6)',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ padding: '16px 24px', borderBottom: '1px solid #1f2b34', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontSize: 20, fontWeight: 600 }}>ИИ-ассистент</div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             {suggestedContextCount !== null ? (
@@ -338,13 +384,13 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
             <button className="tool-btn" onClick={onCloseClick}>Закрыть</button>
           </div>
         </div>
-        <div style={{ padding: '12px 20px', display: 'flex', gap: 12 }}>
+        <div style={{ padding: '12px 24px', display: 'flex', gap: 12 }}>
           <button className={classNames('tool-btn', tab === 'chat' && 'active')} onClick={() => setTab('chat')}>Диалог</button>
           <button className={classNames('tool-btn', tab === 'prompt' && 'active')} onClick={() => setTab('prompt')}>Промпт</button>
           <button className={classNames('tool-btn', tab === 'info' && 'active')} onClick={() => setTab('info')}>Сохранённая информация</button>
         </div>
         {tab === 'chat' ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0 20px 20px' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0 24px 24px' }}>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 Режим
@@ -362,7 +408,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
               </label>
               {mode === 'text' ? (
                 <button className="tool-btn" onClick={() => void connectText(false)} disabled={isConnecting}>
-                  Подключиться
+                  Обновить контекст
                 </button>
               ) : (
                 <button className="tool-btn" onClick={voiceConnected ? disconnectVoice : () => void connectVoice()} disabled={isConnecting}>
@@ -374,6 +420,23 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
               </span>
               <button className="tool-btn" style={{ fontSize: 12 }} onClick={clearHistory}>Очистить историю</button>
             </div>
+            {statusMessages.length ? (
+              <div style={{ marginBottom: 12, maxHeight: 96, overflowY: 'auto', border: '1px solid #1e2f3a', borderRadius: 10, padding: 10, background: '#131c22' }}>
+                {statusMessages.map((entry) => (
+                  <div
+                    key={entry.id}
+                    style={{ fontSize: 12, color: entry.kind === 'error' ? '#ff9b9b' : entry.kind === 'success' ? '#85f7c6' : '#9fb8c9' }}
+                  >
+                    {new Date(entry.ts).toLocaleTimeString('ru-RU', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit',
+                    })}
+                    : {entry.text}
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div ref={transcriptRef} data-testid="assistant-transcript" style={{ flex: 1, overflowY: 'auto', border: '1px solid #1f2b34', borderRadius: 10, padding: 16, background: '#131c22' }}>
               {messages.length ? transcript : <div style={{ color: '#6c7a84' }}>Сообщений за сегодня ещё нет.</div>}
             </div>
@@ -399,7 +462,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
           </div>
         ) : null}
         {tab === 'prompt' ? (
-          <div style={{ flex: 1, padding: '0 20px 20px', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, padding: '0 24px 24px', display: 'flex', flexDirection: 'column' }}>
             <div style={{ fontSize: 14, color: '#9fb8c9', marginBottom: 8 }}>
               Базовый промпт ассистента. Используется как системная инструкция для модели.
             </div>
@@ -417,7 +480,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
           </div>
         ) : null}
         {tab === 'info' ? (
-          <div style={{ flex: 1, padding: '0 20px 20px', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, padding: '0 24px 24px', display: 'flex', flexDirection: 'column' }}>
             <div style={{ fontSize: 14, color: '#9fb8c9', marginBottom: 8 }}>
               Здесь хранится JSON с фактами о вас, которые ассистент может обновлять командой SAVE_JSON.
             </div>

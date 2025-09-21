@@ -6,6 +6,7 @@ import type { PurchaseItem } from '../types';
 import { getLogger } from '../logger';
 import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
+import ExtrasSwitcher from '../components/ExtrasSwitcher';
 
 export const PurchasesPage: React.FC = () => {
   const log = getLogger('PurchasesPage');
@@ -107,9 +108,12 @@ export const PurchasesPage: React.FC = () => {
 
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-        <Link to="/" className="tool-link" aria-label="Назад к доске">← Назад к доске</Link>
-        <h1 style={{ margin: 0 }}>Покупки</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Link to="/" className="tool-link" aria-label="Назад к доске">← Назад к доске</Link>
+          <h1 style={{ margin: 0 }}>Покупки</h1>
+        </div>
+        <ExtrasSwitcher />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 680, marginBottom: 16 }}>
         <input placeholder="Что купить" value={title} onChange={(e) => setTitle(e.target.value)} />

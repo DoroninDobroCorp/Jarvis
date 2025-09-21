@@ -1,10 +1,10 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store';
 import { Link, useNavigate } from 'react-router-dom';
 import { getLogger } from '../logger';
 import { exportBackup, exportAssistantContext, importBackup } from '../exportImport';
 import AssistantModal from './AssistantModal';
-import { useGamificationStore, progressWithinLevel } from '../gamification';
+import { useGamificationStore, progressWithinLevel, totalXpForLevel } from '../gamification';
 
 const log = getLogger('Toolbar');
 
@@ -36,14 +36,36 @@ export const Toolbar: React.FC = () => {
   const resetAll = useAppStore((s) => s.resetAll);
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const levelMenuRef = useRef<HTMLDivElement | null>(null);
+  const importMenuRef = useRef<HTMLDivElement | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const [importMode, setImportMode] = useState<'replace' | 'merge'>('replace');
   const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [levelMenuOpen, setLevelMenuOpen] = useState(false);
   const level = useGamificationStore((s) => s.level);
   const levelTitles = useGamificationStore((s) => s.levelTitles);
   const xp = useGamificationStore((s) => s.xp);
   const progress = progressWithinLevel(xp, level);
   const levelLabel = levelTitles[level]?.title || `Уровень ${level}`;
+  const xpToNext = Math.max(0, progress.required - progress.current);
+  const levelHistory = useMemo(
+    () =>
+      Object.entries(levelTitles)
+        .map(([lvl, info]) => {
+          const levelNumber = Number(lvl);
+          return {
+            level: levelNumber,
+            title: info.title,
+            assignedAt: info.assignedAt,
+            xpStart: totalXpForLevel(levelNumber),
+            xpNext: totalXpForLevel(levelNumber + 1),
+          };
+        })
+        .sort((a, b) => a.level - b.level),
+    [levelTitles]
+  );
   const onPickFile = (mode: 'replace' | 'merge') => {
     setImportMode(mode);
     fileRef.current?.click();
@@ -67,6 +89,25 @@ export const Toolbar: React.FC = () => {
   const toggle = (next: Parameters<typeof setTool>[0]) => {
     setTool(tool === next ? 'none' : next);
   };
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (levelMenuOpen && levelMenuRef.current && !levelMenuRef.current.contains(target)) {
+        setLevelMenuOpen(false);
+      }
+      if (importMenuOpen && importMenuRef.current && !importMenuRef.current.contains(target)) {
+        setImportMenuOpen(false);
+      }
+      if (exportMenuOpen && exportMenuRef.current && !exportMenuRef.current.contains(target)) {
+        setExportMenuOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [levelMenuOpen, importMenuOpen, exportMenuOpen]);
 
   // Сохранение текущего центра вида как стартового
   const viewport = useAppStore((s) => s.viewport);
@@ -105,18 +146,85 @@ export const Toolbar: React.FC = () => {
         <ToolButton active={tool === 'add-person-partner'} onClick={() => { log.debug('setTool', { to: 'add-person-partner' }); toggle('add-person-partner'); }} title="Добавить партнёра">🤝</ToolButton>
         <ToolButton active={tool === 'add-person-bot'} onClick={() => { log.debug('setTool', { to: 'add-person-bot' }); toggle('add-person-bot'); }} title="Добавить бота">🤖</ToolButton>
         <ToolButton active={tool === 'link'} onClick={() => { log.debug('setTool', { to: 'link' }); toggle('link'); }} title="Соединить ниткой">🧵</ToolButton>
-        <div style={{ marginLeft: 12, fontSize: 12, color: 'var(--text)' }} title={`Прогресс уровня: ${progress.current}/${progress.required}`}>
-          ⭐ {levelLabel}
-        </div>
+      </div>
+      <div
+        ref={levelMenuRef}
+        className="tool-group"
+        style={{ alignItems: 'center', gap: 12, position: 'relative', paddingLeft: 14, paddingRight: 14 }}
+      >
+        <button
+          type="button"
+          className="level-toggle"
+          onClick={() => setLevelMenuOpen((v) => !v)}
+          title={`До следующего уровня: ${xpToNext} XP`}
+          aria-haspopup="true"
+          aria-expanded={levelMenuOpen}
+        >
+          <span style={{ fontSize: 20 }}>⭐</span>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>Уровень {level}</div>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>{levelLabel}</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)' }}>{progress.current} / {progress.required} XP</div>
+          </div>
+          <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--muted)' }}>{levelMenuOpen ? '▲' : '▼'}</span>
+        </button>
+        {levelMenuOpen ? (
+          <div
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 8px)',
+              left: 0,
+              background: '#10181f',
+              border: '1px solid #1f2b34',
+              borderRadius: 10,
+              padding: 12,
+              minWidth: 220,
+              boxShadow: '0 12px 36px rgba(0,0,0,0.45)',
+              zIndex: 1200,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>История уровней</div>
+            <div style={{ maxHeight: 200, overflowY: 'auto', display: 'grid', gap: 6 }}>
+              {levelHistory.map((item) => (
+                <div key={item.level} style={{ fontSize: 12, color: item.level === level ? '#fff' : 'var(--muted)' }}>
+                  <div style={{ fontWeight: item.level === level ? 600 : 500 }}>Уровень {item.level}</div>
+                  <div style={{ fontSize: 11 }}>{item.title}</div>
+                  <div style={{ fontSize: 10, color: '#7f93a3' }}>XP ≥ {item.xpStart}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 10, borderTop: '1px solid #1f2b34', paddingTop: 10 }}>
+              <Link to="/achievements" className="level-achievements-link" onClick={() => setLevelMenuOpen(false)}>
+                🏅 Достижения
+              </Link>
+            </div>
+          </div>
+        ) : null}
       </div>
       <div className="tool-group">
-        <ToolButton onClick={() => { log.info('assistant:open'); setAssistantOpen(true); }} title="ИИ-ассистент (аудио)">🤖 Ассистент</ToolButton>
-        <ToolButton onClick={() => { log.info('deleteSelection:click'); void deleteSelection(); }} title="Удалить выбранное">🗑️ Удалить</ToolButton>
-        <ToolButton onClick={() => { log.info('goUp:click'); goUp(); }} title="Вверх по уровню">⬆️ Назад</ToolButton>
+        <ToolButton onClick={() => { log.info('assistant:open'); setAssistantOpen(true); }} title="ИИ-ассистент">👩‍💻</ToolButton>
+        <ToolButton onClick={() => { log.info('deleteSelection:click'); void deleteSelection(); }} title="Удалить выбранное">🗑️</ToolButton>
+        <ToolButton onClick={() => { log.info('goUp:click'); goUp(); }} title="Вверх по уровню">⬆️</ToolButton>
       </div>
       <div className="tool-group">
-        <Link to="/active" className="tool-link" title="Активные задачи" aria-label="Активные задачи">🔥 Активные</Link>
-        <Link to="/done" className="tool-link" style={{ marginLeft: 8 }} title="Выполненные задачи" aria-label="Выполненные задачи">✅ Выполненные</Link>
+        <Link
+          to="/active"
+          className="tool-link"
+          title="Активные задачи"
+          aria-label="Активные задачи"
+          style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          🔥
+        </Link>
+        <Link
+          to="/done"
+          className="tool-link"
+          title="Выполненные задачи"
+          aria-label="Выполненные задачи"
+          style={{ marginLeft: 8, padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          ✅
+        </Link>
         <div style={{ marginLeft: 12 }}>
           <label style={{ color: 'var(--text)', marginRight: 6 }}>Допстраницы</label>
           <select aria-label="Допстраницы" onChange={(e) => { const v = e.target.value; if (v) { navigate(v); e.currentTarget.selectedIndex = 0; } }}>
@@ -148,16 +256,22 @@ export const Toolbar: React.FC = () => {
           }}>⛶ Полноэкранно</button>
           <button className="tool-btn" title="Очистить всю базу" onClick={() => { if (confirm('Очистить все данные? Это действие необратимо.')) { void resetAll(); } }}>🗑 Очистить всё</button>
           <span style={{ width: 8 }} />
-          <button className="tool-btn" title="Экспорт в JSON" onClick={() => { log.info('export:click'); void exportBackup(); }}>⤓ Экспорт</button>
-          <button className="tool-btn" title="Экспортировать контекст ассистента" onClick={() => { log.info('export:assistant-context'); void exportAssistantContext(); }}>⤓ Контекст ассистента</button>
-          <div style={{ position: 'relative', display: 'inline-block' }}>
+          <button className="tool-btn" title="Запомнить текущий центр вида" onClick={saveStartCenter}>📍</button>
+          <div ref={exportMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+            <button className="tool-btn" title="Экспорт / Ещё" onClick={() => setExportMenuOpen((v) => !v)}>☰ Экспорт/Ещё</button>
+            {exportMenuOpen ? (
+              <div style={{ position: 'absolute', right: 0, top: '100%', background: '#222', color: '#fff', border: '1px solid #444', borderRadius: 6, padding: 8, minWidth: 220, zIndex: 1000, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}>
+                <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Экспортировать все данные" onClick={() => { log.info('export:click'); void exportBackup(); setExportMenuOpen(false); }}>⤓ Экспорт базы</button>
+                <button className="tool-btn" style={{ display: 'block', width: '100%', marginTop: 6 }} title="Экспортировать контекст ассистента" onClick={() => { log.info('export:assistant-context'); void exportAssistantContext(); setExportMenuOpen(false); }}>🧠 Контекст ассистента</button>
+              </div>
+            ) : null}
+          </div>
+          <div ref={importMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
             <button className="tool-btn" title="Импорт / Ещё" onClick={() => setImportMenuOpen((v) => !v)}>☰ Импорт/Ещё</button>
             {importMenuOpen ? (
               <div style={{ position: 'absolute', right: 0, top: '100%', background: '#222', color: '#fff', border: '1px solid #444', borderRadius: 6, padding: 8, minWidth: 220, zIndex: 1000, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}>
                 <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Импорт (замена)" onClick={() => { onPickFile('replace'); setImportMenuOpen(false); }}>⤒ Импорт (замена)</button>
                 <button className="tool-btn" style={{ display: 'block', width: '100%', marginTop: 6 }} title="Импорт (merge)" onClick={() => { onPickFile('merge'); setImportMenuOpen(false); }}>⤒ Импорт (merge)</button>
-                <div style={{ height: 1, background: '#444', margin: '6px 0' }} />
-                <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Запомнить текущий центр вида для старта" onClick={() => { saveStartCenter(); setImportMenuOpen(false); }}>📍</button>
               </div>
             ) : null}
           </div>

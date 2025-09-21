@@ -73,6 +73,69 @@ button.active {
 .tool-btn {
   min-width: 42px;
 }
+
+.level-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 10px;
+  font: inherit;
+}
+
+.level-toggle:hover,
+.level-toggle:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.level-achievements-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #8cc8ff;
+  text-decoration: none;
+}
+
+.level-achievements-link:hover {
+  text-decoration: underline;
+}
+
+.extras-switcher {
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.extras-switcher__link {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 18px;
+}
+
+.extras-switcher__link:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.extras-switcher__link.is-active {
+  background: rgba(79, 163, 255, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(79, 163, 255, 0.35);
+}
 .tool-link {
   display: inline-block;
   padding: 8px 12px;
