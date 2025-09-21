@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store';
 import type { TaskNode, Recurrence } from '../types';
@@ -12,6 +12,11 @@ export const ActiveTasksPage: React.FC = () => {
   const revealNode = useAppStore((s) => s.revealNode);
   const navigate = useNavigate();
   const log = getLogger('ActiveTasks');
+
+  // Inline edit state
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState<string>('');
+  const [editDesc, setEditDesc] = useState<string>('');
 
   const activeTasks = useMemo(() => {
     const prioRank = (p: TaskNode['priority'] | undefined) => (
@@ -60,6 +65,35 @@ export const ActiveTasksPage: React.FC = () => {
     return result;
   }, [activeTasks]);
 
+  const groupPathById = useMemo(() => {
+    const pathMap = new Map<string, string>();
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+
+    const resolvePath = (groupId: string): string => {
+      const cached = pathMap.get(groupId);
+      if (cached) return cached;
+      const node = nodesById.get(groupId);
+      if (!node || node.type !== 'group') {
+        pathMap.set(groupId, '');
+        return '';
+      }
+      const parentNode = node.parentId ? nodesById.get(node.parentId) : undefined;
+      const parentPath = parentNode && parentNode.type === 'group' ? resolvePath(parentNode.id) : '';
+      const namePart = (node.name || '').trim() || 'Без названия';
+      const fullPath = parentPath ? `${parentPath} / ${namePart}` : namePart;
+      pathMap.set(groupId, fullPath);
+      return fullPath;
+    };
+
+    nodes.forEach((node) => {
+      if (node.type === 'group') {
+        resolvePath(node.id);
+      }
+    });
+
+    return pathMap;
+  }, [nodes]);
+
 
   useEffect(() => {
     log.info('activeTasks:update', { count: activeTasks.length });
@@ -79,8 +113,32 @@ export const ActiveTasksPage: React.FC = () => {
               <span data-testid="date-header" data-date-key={g.key} style={{ position: 'absolute', top: -10, left: 0, background: '#fff', padding: '0 6px', fontSize: 12, color: '#666' }}>{g.label}</span>
             </div>
             {/* Карточки задач этой даты, раскладка по колонкам */}
-            {g.tasks.map((t) => (
-              <div key={t.id} className="active-item" style={{ position: 'relative' }}>
+            {g.tasks.map((t) => {
+              const prioBg = t.priority === 'high'
+                ? '#2a1518' // dark reddish
+                : t.priority === 'med'
+                ? '#2a2515' // dark yellowish
+                : t.priority === 'low'
+                ? '#152a1b' // dark greenish
+                : '#161a1e'; // default dark
+              const prioBorder = t.priority === 'high'
+                ? '#592029'
+                : t.priority === 'med'
+                ? '#5a4a1f'
+                : t.priority === 'low'
+                ? '#204a2d'
+                : '#1f2b34';
+              const parentGroupName = t.parentId ? (groupPathById.get(t.parentId) || 'Без группы') : 'Без группы';
+              return (
+                <div
+                  key={t.id}
+                  className="active-item"
+                  title={`Группа: ${parentGroupName}`}
+                  aria-label={`Группа: ${parentGroupName}`}
+                  data-group-label={g.label}
+                  data-parent-group={parentGroupName}
+                  style={{ position: 'relative', background: prioBg, border: `1px solid ${prioBorder}`, borderRadius: 10, padding: 10 }}
+              >
                 {(t.status === 'in_progress' || t.status === 'active') && t.isActual !== false ? (
                   <div
                     title="Требует внимания"
@@ -89,10 +147,41 @@ export const ActiveTasksPage: React.FC = () => {
                     style={{ position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: '50%', background: '#000', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 13, lineHeight: 1, boxShadow: '0 1px 4px rgba(0,0,0,0.35)', zIndex: 2, border: '1px solid #222', pointerEvents: 'none' }}
                   >⏳</div>
                 ) : null}
-                <div className="active-item__title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {t.title}
-                </div>
-                {t.description ? <div className="active-item__desc">{t.description}</div> : null}
+                {/* Title + description with inline editing */}
+                {editId === t.id ? (
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    <input
+                      autoFocus
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      onKeyDown={async (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); await updateNode(t.id, { title: editTitle, description: editDesc }); setEditId(null); } }}
+                      placeholder="Название задачи"
+                      style={{ fontSize: 18, fontWeight: 800, padding: '6px 8px', background: '#0f1418', color: '#fff', border: '1px solid #27323a', borderRadius: 8 }}
+                    />
+                    <textarea
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      placeholder="Описание (необязательно)"
+                      style={{ fontSize: 13, padding: '6px 8px', minHeight: 48, background: '#0f1418', color: '#ddd', border: '1px solid #27323a', borderRadius: 8 }}
+                    />
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="tool-btn" onClick={async () => { await updateNode(t.id, { title: editTitle, description: editDesc }); setEditId(null); }}>Сохранить</button>
+                      <button className="tool-btn" onClick={() => setEditId(null)}>Отмена</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      className="active-item__title"
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 18, fontWeight: 800, cursor: 'pointer' }}
+                      title="Редактировать задачу"
+                      onClick={() => { setEditId(t.id); setEditTitle(t.title || ''); setEditDesc(t.description || ''); }}
+                    >
+                      {t.title}
+                    </div>
+                    {t.description ? <div className="active-item__desc" style={{ fontSize: 13, color: '#aeb7bf' }}>{t.description}</div> : null}
+                  </>
+                )}
                 <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {Array.isArray(t.subtasks) && t.subtasks.length > 0 ? (
                     t.subtasks.map((s, idx) => (
@@ -109,74 +198,71 @@ export const ActiveTasksPage: React.FC = () => {
                         <span style={{ textDecoration: s.done ? 'line-through' : undefined }}>{s.title}</span>
                       </label>
                     ))
-                  ) : (
-                    <div style={{ color: '#888', fontSize: 12 }}>Подзадач пока нет</div>
-                  )}
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <input
-                      placeholder="Новая подзадача"
-                      style={{ flex: 1 }}
-                      onKeyDown={(e) => {
-                        const inp = e.target as HTMLInputElement;
-                        if (e.key === 'Enter' && inp.value.trim()) {
-                          const id = Math.random().toString(36).slice(2);
-                          const next = [...(t.subtasks || []), { id, title: inp.value.trim(), done: false, createdAt: Date.now() }];
-                          void updateNode(t.id, { subtasks: next });
-                          inp.value = '';
+                  ) : null}
+                  {/* Divider and compact toolbar with emojis */}
+                  <div style={{ height: 1, background: '#25313a', margin: '8px 0' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <button
+                      className="tool-btn"
+                      title="Добавить подзадачу"
+                      style={{ padding: '4px 8px' }}
+                      onClick={() => {
+                        const title = window.prompt('Название подзадачи');
+                        if (!title || !title.trim()) return;
+                        const id = Math.random().toString(36).slice(2);
+                        const next = [...(t.subtasks || []), { id, title: title.trim(), done: false, createdAt: Date.now() }];
+                        void updateNode(t.id, { subtasks: next });
+                      }}
+                    >
+                      ➕
+                    </button>
+                    <span style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, #2b3a45, transparent)' }} />
+                    <button
+                      className="tool-btn"
+                      title="Отметить выполненной"
+                      style={{ padding: '4px 8px' }}
+                      onClick={async () => {
+                        const nowTs = Date.now();
+                        if (t.recurrence && (t.recurrence as Recurrence).kind !== 'none') {
+                          const base = t.dueDate ? new Date(t.dueDate) : new Date();
+                          base.setDate(base.getDate() + 1);
+                          const nextDue = computeNextDueDate(t.recurrence as Recurrence, base);
+                          await updateNode(t.id, { status: 'done', completedAt: nowTs });
+                          await addTask({
+                            title: t.title,
+                            description: t.description,
+                            priority: t.priority,
+                            durationMinutes: t.durationMinutes,
+                            status: 'active',
+                            color: t.color,
+                            parentId: t.parentId ?? null,
+                            x: t.x,
+                            y: t.y,
+                            dueDate: nextDue ?? undefined,
+                            recurrence: t.recurrence as Recurrence,
+                            textSize: t.textSize,
+                            iconEmoji: t.iconEmoji,
+                            subtasks: Array.isArray(t.subtasks)
+                              ? t.subtasks.map((s) => ({ id: Math.random().toString(36).slice(2), title: s.title, done: false, createdAt: Date.now() }))
+                              : undefined,
+                          });
+                        } else {
+                          await updateNode(t.id, { status: 'done', completedAt: nowTs });
                         }
                       }}
-                    />
-                    <button className="tool-btn" onClick={(e) => {
-                      const inputEl = (e.currentTarget.previousSibling as HTMLInputElement);
-                      const value = inputEl && 'value' in inputEl ? inputEl.value.trim() : '';
-                      if (!value) return;
-                      const id = Math.random().toString(36).slice(2);
-                      const next = [...(t.subtasks || []), { id, title: value, done: false, createdAt: Date.now() }];
-                      void updateNode(t.id, { subtasks: next });
-                      inputEl.value = '';
-                    }}>Добавить</button>
+                    >
+                      ✅
+                    </button>
                   </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-                  <button className="tool-btn" onClick={async () => {
-                    const nowTs = Date.now();
-                    if (t.recurrence && (t.recurrence as Recurrence).kind !== 'none') {
-                      const base = t.dueDate ? new Date(t.dueDate) : new Date();
-                      base.setDate(base.getDate() + 1); // строго после текущей даты
-                      const nextDue = computeNextDueDate(t.recurrence as Recurrence, base);
-                      await updateNode(t.id, { status: 'done', completedAt: nowTs });
-                      await addTask({
-                        title: t.title,
-                        description: t.description,
-                        priority: t.priority,
-                        durationMinutes: t.durationMinutes,
-                        status: 'active',
-                        color: t.color,
-                        parentId: t.parentId ?? null,
-                        x: t.x,
-                        y: t.y,
-                        dueDate: nextDue ?? undefined,
-                        recurrence: t.recurrence as Recurrence,
-                        textSize: t.textSize,
-                        iconEmoji: t.iconEmoji,
-                        subtasks: Array.isArray(t.subtasks)
-                          ? t.subtasks.map((s) => ({ id: Math.random().toString(36).slice(2), title: s.title, done: false, createdAt: Date.now() }))
-                          : undefined,
-                      });
-                    } else {
-                      await updateNode(t.id, { status: 'done', completedAt: nowTs });
-                    }
-                  }}>Сделано</button>
                 </div>
                 <div className="active-item__meta">
                   {t.dueDate ? (
                     <span className="badge">⏰ {new Date(t.dueDate).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
                   ) : null}
-                  {t.priority ? <span className={`badge badge--${t.priority}`}>Приоритет: {t.priority}</span> : null}
                   <button className="tool-btn" style={{ marginLeft: 8 }} onClick={() => { revealNode(t.id); navigate('/'); }}>Открыть на доске</button>
                 </div>
               </div>
-            ))}
+            )})}
           </React.Fragment>
         ))}
         {activeTasks.length === 0 ? <div className="empty">Нет активных задач</div> : null}

@@ -5,8 +5,25 @@ import { getLogger } from '../logger';
 import { exportBackup, exportAssistantContext, importBackup } from '../exportImport';
 import AssistantModal from './AssistantModal';
 import { useGamificationStore, progressWithinLevel, totalXpForLevel } from '../gamification';
+import type { AnyNode } from '../types';
 
 const log = getLogger('Toolbar');
+
+type SnippetParts = {
+  prefix: string;
+  before: string;
+  match: string;
+  after: string;
+  suffix: string;
+};
+
+type SearchHit = {
+  node: AnyNode;
+  fieldLabel: string;
+  snippet: SnippetParts;
+  title: string;
+  path: string;
+};
 
 const ToolButton: React.FC<{
   active?: boolean;
@@ -29,21 +46,27 @@ export const Toolbar: React.FC = () => {
   const setTool = useAppStore((s) => s.setTool);
   const deleteSelection = useAppStore((s) => s.deleteSelection);
   const goUp = useAppStore((s) => s.goUp);
+  const revealNode = useAppStore((s) => s.revealNode);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const perfModeOverride = useAppStore((s) => s.perfModeOverride);
   const setPerfModeOverride = useAppStore((s) => s.setPerfModeOverride);
   const resetAll = useAppStore((s) => s.resetAll);
+  const nodes = useAppStore((s) => s.nodes);
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const levelMenuRef = useRef<HTMLDivElement | null>(null);
   const importMenuRef = useRef<HTMLDivElement | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [importMode, setImportMode] = useState<'replace' | 'merge'>('replace');
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [levelMenuOpen, setLevelMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
   const level = useGamificationStore((s) => s.level);
   const levelTitles = useGamificationStore((s) => s.levelTitles);
   const xp = useGamificationStore((s) => s.xp);
@@ -102,12 +125,175 @@ export const Toolbar: React.FC = () => {
       if (exportMenuOpen && exportMenuRef.current && !exportMenuRef.current.contains(target)) {
         setExportMenuOpen(false);
       }
+      if (searchOpen && searchRef.current && !searchRef.current.contains(target)) {
+        setSearchOpen(false);
+        setSearchTerm('');
+      }
     };
     window.addEventListener('pointerdown', handlePointerDown);
     return () => {
       window.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [levelMenuOpen, importMenuOpen, exportMenuOpen]);
+  }, [levelMenuOpen, importMenuOpen, exportMenuOpen, searchOpen]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const id = window.setTimeout(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }, 0);
+    return () => {
+      window.clearTimeout(id);
+    };
+  }, [searchOpen]);
+
+  const groupPathById = useMemo(() => {
+    const pathMap = new Map<string, string>();
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    const visiting = new Set<string>();
+
+    const resolvePath = (groupId: string): string => {
+      if (visiting.has(groupId)) return '';
+      const cached = pathMap.get(groupId);
+      if (cached !== undefined) return cached;
+      const node = nodesById.get(groupId);
+      if (!node || node.type !== 'group') {
+        pathMap.set(groupId, '');
+        return '';
+      }
+      visiting.add(groupId);
+      const parentNode = node.parentId ? nodesById.get(node.parentId) : undefined;
+      const parentPath = parentNode && parentNode.type === 'group' ? resolvePath(parentNode.id) : '';
+      const namePart = (node.name || '').trim() || 'Без названия';
+      const fullPath = parentPath ? `${parentPath} / ${namePart}` : namePart;
+      pathMap.set(groupId, fullPath);
+      visiting.delete(groupId);
+      return fullPath;
+    };
+
+    nodes.forEach((node) => {
+      if (node.type === 'group') {
+        resolvePath(node.id);
+      }
+    });
+
+    return pathMap;
+  }, [nodes]);
+
+  const searchResult = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    if (!query) return { hits: [] as SearchHit[], total: 0 };
+
+    const makeSnippet = (value: string): SnippetParts | null => {
+      const text = value.trim();
+      if (!text) return null;
+      const lower = text.toLowerCase();
+      const index = lower.indexOf(query);
+      if (index === -1) return null;
+      const beforeStart = Math.max(0, index - 30);
+      const afterEnd = Math.min(text.length, index + query.length + 30);
+      return {
+        prefix: beforeStart > 0 ? '…' : '',
+        before: text.slice(beforeStart, index),
+        match: text.slice(index, index + query.length),
+        after: text.slice(index + query.length, afterEnd),
+        suffix: afterEnd < text.length ? '…' : '',
+      };
+    };
+
+    const getTitleForNode = (node: AnyNode) => {
+      if (node.type === 'task') return (node.title || '').trim() || 'Без названия';
+      if (node.type === 'group') return (node.name || '').trim() || 'Без названия';
+      return (node.name || '').trim() || 'Без имени';
+    };
+
+    const computePath = (node: AnyNode) => {
+      if (node.parentId) {
+        const parentPath = groupPathById.get(node.parentId);
+        return parentPath || '';
+      }
+      return '';
+    };
+
+    const matches: SearchHit[] = [];
+
+    nodes.forEach((node) => {
+      const fields: Array<{ label: string; value: string }> = [];
+      const addField = (label: string, value?: string | null) => {
+        if (!value) return;
+        const trimmed = value.trim();
+        if (!trimmed) return;
+        fields.push({ label, value: trimmed });
+      };
+
+      if (node.type === 'task') {
+        addField('Название', node.title);
+        addField('Описание', node.description);
+        if (Array.isArray(node.subtasks)) {
+          node.subtasks.forEach((sub, idx) => {
+            addField(`Подзадача ${idx + 1}`, sub.title);
+          });
+        }
+        const taskPath = computePath(node);
+        if (taskPath) addField('Группа', taskPath);
+      } else if (node.type === 'group') {
+        addField('Название группы', node.name);
+        addField('Описание группы', node.description);
+        const parentPath = computePath(node);
+        if (parentPath) addField('Родительская группа', parentPath);
+      } else if (node.type === 'person') {
+        addField('Имя', node.name);
+        if (node.contacts) {
+          addField('Email', node.contacts.email);
+          addField('Телефон', node.contacts.phone);
+          addField('Заметки', node.contacts.notes);
+        }
+        const personPath = computePath(node);
+        if (personPath) addField('Группа', personPath);
+      }
+
+      const matchField = fields.find((field) => field.value.toLowerCase().includes(query));
+      if (!matchField) return;
+
+      const snippet = makeSnippet(matchField.value);
+      if (!snippet) return;
+
+      matches.push({
+        node,
+        fieldLabel: matchField.label,
+        snippet,
+        title: getTitleForNode(node),
+        path: computePath(node),
+      });
+    });
+
+    return { hits: matches.slice(0, 50), total: matches.length };
+  }, [groupPathById, nodes, searchTerm]);
+
+  const searchHits = searchResult.hits;
+  const searchTotal = searchResult.total;
+  const searchTruncated = searchTotal > searchHits.length;
+  const hasSearchQuery = searchTerm.trim().length > 0;
+
+  const handleSelectNode = (nodeId: string) => {
+    log.info('search:select', { nodeId });
+    revealNode(nodeId);
+    navigate('/');
+    setSearchOpen(false);
+    setSearchTerm('');
+  };
+
+  const toggleSearch = () => {
+    setSearchOpen((prev) => {
+      const next = !prev;
+      if (!next) {
+        setSearchTerm('');
+      } else {
+        log.info('search:open');
+      }
+      return next;
+    });
+  };
 
   // Сохранение текущего центра вида как стартового
   const viewport = useAppStore((s) => s.viewport);
@@ -146,6 +332,103 @@ export const Toolbar: React.FC = () => {
         <ToolButton active={tool === 'add-person-partner'} onClick={() => { log.debug('setTool', { to: 'add-person-partner' }); toggle('add-person-partner'); }} title="Добавить партнёра">🤝</ToolButton>
         <ToolButton active={tool === 'add-person-bot'} onClick={() => { log.debug('setTool', { to: 'add-person-bot' }); toggle('add-person-bot'); }} title="Добавить бота">🤖</ToolButton>
         <ToolButton active={tool === 'link'} onClick={() => { log.debug('setTool', { to: 'link' }); toggle('link'); }} title="Соединить ниткой">🧵</ToolButton>
+        <div ref={searchRef} style={{ position: 'relative' }}>
+          <ToolButton active={searchOpen} onClick={toggleSearch} title="Поиск по всем объектам">🔍</ToolButton>
+          {searchOpen ? (
+            <div
+              style={{
+                position: 'absolute',
+                top: 'calc(100% + 8px)',
+                right: 0,
+                background: '#10181f',
+                border: '1px solid #1f2b34',
+                borderRadius: 10,
+                padding: 12,
+                width: 340,
+                boxShadow: '0 12px 36px rgba(0,0,0,0.5)',
+                zIndex: 1400,
+                display: 'grid',
+                gap: 10,
+              }}
+            >
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (searchHits[0]) {
+                      handleSelectNode(searchHits[0].node.id);
+                    }
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setSearchOpen(false);
+                    setSearchTerm('');
+                  }
+                }}
+                placeholder="Найти по всем доскам"
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid #27323a',
+                  background: '#0f1418',
+                  color: '#fff',
+                  fontSize: 14,
+                }}
+              />
+              {!hasSearchQuery ? (
+                <div style={{ fontSize: 12, color: '#7f93a3' }}>Введите фрагмент названия, описания или заметок.</div>
+              ) : searchHits.length === 0 ? (
+                <div style={{ fontSize: 12, color: '#7f93a3' }}>Ничего не найдено.</div>
+              ) : (
+                <div style={{ maxHeight: 320, overflowY: 'auto', display: 'grid', gap: 8 }}>
+                  {searchHits.map((hit) => {
+                    const typeLabel = hit.node.type === 'task' ? 'Задача' : hit.node.type === 'group' ? 'Группа' : 'Персона';
+                    return (
+                      <button
+                        key={`${hit.node.id}-${hit.fieldLabel}`}
+                        type="button"
+                        className="tool-btn"
+                        style={{
+                          textAlign: 'left',
+                          display: 'block',
+                          width: '100%',
+                          padding: '8px 10px',
+                          whiteSpace: 'normal',
+                          lineHeight: 1.4,
+                        }}
+                        onClick={() => handleSelectNode(hit.node.id)}
+                        title="Открыть на доске"
+                      >
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{hit.title}</div>
+                        <div style={{ fontSize: 11, color: '#7f93a3', marginTop: 2 }}>
+                          {typeLabel}
+                          {hit.path ? ` · ${hit.path}` : ''}
+                        </div>
+                        <div style={{ fontSize: 12, marginTop: 6 }}>
+                          {hit.snippet.prefix}
+                          {hit.snippet.before}
+                          <mark style={{ background: '#3f5463', color: '#fff', padding: '0 2px', borderRadius: 2 }}>{hit.snippet.match}</mark>
+                          {hit.snippet.after}
+                          {hit.snippet.suffix}
+                        </div>
+                        <div style={{ fontSize: 10, color: '#5a6b78', marginTop: 6 }}>Поле: {hit.fieldLabel}</div>
+                      </button>
+                    );
+                  })}
+                  {searchTruncated ? (
+                    <div style={{ fontSize: 11, color: '#7f93a3' }}>
+                      Показаны первые {searchHits.length} результатов из {searchTotal}. Уточните запрос.
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
       <div
         ref={levelMenuRef}
