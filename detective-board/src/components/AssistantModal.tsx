@@ -5,6 +5,7 @@ import { getSnapshot } from '../wellbeing';
 
 const SAVED_INFO_KEY = 'ASSISTANT_SAVED_INFO_V1';
 const PROMPT_KEY = 'ASSISTANT_PROMPT_V1';
+const TEXT_PROVIDER_KEY = 'ASSISTANT_TEXT_PROVIDER_V1';
 const DEFAULT_PROMPT = `Ты — внимательный психолог-коуч и стратег задач.
 Твоя базовая задача — помочь понять приоритеты и выбрать уместную следующую задачу, учитывая состояние пользователя. При этом будь всегда готов оказать психологическую поддержку: мягко отражай, помогай проживать эмоции и снижать напряжение.
 Работай мягко, эмпатично, по шагам: выясни контекст, предложи варианты, помоги выбрать и зафиксировать конкретные шаги и первый микро-шаг на 5–10 минут.
@@ -49,6 +50,14 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
   const [mode, setMode] = useState<'voice' | 'text'>('voice');
   const [inputText, setInputText] = useState('');
   const [messages, setMessages] = useState<Array<{ id?: string; role: 'user' | 'assistant'; text: string }>>([]);
+  const [textProvider, setTextProvider] = useState<'google' | 'openai'>(() => {
+    try {
+      const stored = localStorage.getItem(TEXT_PROVIDER_KEY);
+      return stored === 'openai' ? 'openai' : 'google';
+    } catch {
+      return 'google';
+    }
+  });
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dataRef = useRef<RTCDataChannel | null>(null);
@@ -63,6 +72,9 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
   useEffect(() => {
     try { localStorage.setItem(SAVED_INFO_KEY, savedInfo); } catch {}
   }, [savedInfo]);
+  useEffect(() => {
+    try { localStorage.setItem(TEXT_PROVIDER_KEY, textProvider); } catch {}
+  }, [textProvider]);
 
   useEffect(() => {
     if (!open) return;
@@ -112,7 +124,8 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
       if (mode === 'text') {
         setConnected(true);
         setDcOpen(false);
-        setStatus('Текстовый чат готов');
+        const providerLabel = textProvider === 'google' ? 'Google' : 'OpenAI';
+        setStatus(`Текстовый чат (${providerLabel}) готов`);
         return;
       }
       voiceRetriesRef.current = 0;
@@ -289,6 +302,12 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
     }
   }
 
+  useEffect(() => {
+    if (mode !== 'text' || !connected) return;
+    const providerLabel = textProvider === 'google' ? 'Google' : 'OpenAI';
+    setStatus(`Текстовый чат (${providerLabel}) готов`);
+  }, [textProvider, mode, connected]);
+
   async function sendUserText() {
     try {
       const dc = dataRef.current;
@@ -298,28 +317,33 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
       setInputText('');
       if (mode === 'text') {
         // Fallback: call dev-only text endpoint
-        setStatus('Отправка запроса...');
+        const providerLabel = textProvider === 'google' ? 'Google' : 'OpenAI';
+        setStatus(`Отправка запроса (${providerLabel})...`);
         try {
           const backup = await getBackupData();
           const wb = getSnapshot();
           const context = `Профиль (Сохранённая информация):\n${savedInfo}\n\nСамооценки (сводка): ${JSON.stringify(wb)}\n\nЗадачи и связи (backup JSON):\n${JSON.stringify(backup)}`;
-          const resp = await fetch('/api/openai/text', {
+          const endpoint = textProvider === 'google' ? '/api/google/text' : '/api/openai/text';
+          const resp = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: text, instructions: prompt, context }),
           });
           const json = await resp.json();
+          if (!resp.ok) {
+            throw new Error(typeof json?.error === 'string' ? json.error : 'request_failed');
+          }
           const reply = (json?.text as string) || '';
           if (reply) setMessages((arr) => [...arr, { role: 'assistant', text: reply }]);
           const usedModel = (json?.model as string) || 'unknown';
-          setStatus(reply ? `Ответ получен (${usedModel})` : 'Пустой ответ');
+          setStatus(reply ? `Ответ получен (${providerLabel}${usedModel ? `: ${usedModel}` : ''})` : 'Пустой ответ');
           // Try to extract SAVE_JSON from reply
           if (reply) {
             reply.split('\n').forEach((line) => applySaveJsonPatchLine(line));
           }
         } catch (e) {
           console.error(e);
-          setStatus('Ошибка текстового запроса');
+          setStatus(textProvider === 'google' ? 'Ошибка запроса к Google API — попробуйте переключить провайдера' : 'Ошибка текстового запроса');
         }
         return;
       }
@@ -358,6 +382,17 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
               <select value={mode} onChange={(e) => setMode(e.target.value as 'voice' | 'text')}>
                 <option value="voice">Голос</option>
                 <option value="text">Текст</option>
+              </select>
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ color: '#aaa', fontSize: 12 }}>Провайдер</span>
+              <select
+                value={textProvider}
+                onChange={(e) => setTextProvider(e.target.value as 'google' | 'openai')}
+                disabled={mode !== 'text'}
+              >
+                <option value="google">Google</option>
+                <option value="openai">OpenAI</option>
               </select>
             </label>
             {!connected ? (
