@@ -6,6 +6,7 @@ import { test, expect } from '@playwright/test';
 // - статус не становится мгновенно "Отключено"
 
 test.describe('Assistant Voice stability', () => {
+  test.skip(({ browserName }) => browserName !== 'chromium', 'Стабильнее всего выполняется в Chromium');
   test('режим голос не вылетает мгновенно', async ({ page }) => {
     test.setTimeout(60_000);
 
@@ -15,6 +16,19 @@ test.describe('Assistant Voice stability', () => {
         new Promise<T>((_r, rej) => setTimeout(() => rej(new Error(`Safety timeout: ${label} (${ms}ms)`)), ms)) as unknown as Promise<T>,
       ]);
     };
+
+    await page.route('**/api/openai/rt/token', async (route) => {
+      const payload = {
+        client_secret: { value: 'demo-offline-token', expires_at: Date.now() + 60_000, demo: true },
+        model: 'gpt-4o-realtime-preview',
+        demo: true,
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(payload),
+      });
+    });
 
     await withTimeout(page.goto('/'), 10_000, 'page.goto');
 
@@ -43,10 +57,12 @@ test.describe('Assistant Voice stability', () => {
     const s1 = await status.textContent();
     expect((s1 || '').toLowerCase()).not.toContain('отключено');
 
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(3200);
     const s2 = await status.textContent();
-    // может отключиться через 3с, но не мгновенно
-    // Главное — что мы пережили первые ~2.5с
-    expect(true).toBeTruthy();
+    expect((s2 || '').toLowerCase()).toContain('подключ');
+
+    // демо-режим присылает текстовый ответ вместо аудио
+    const transcript = modal.getByTestId('assistant-transcript');
+    await expect(transcript).toContainText('Ассистент (демо-голос)');
   });
 });

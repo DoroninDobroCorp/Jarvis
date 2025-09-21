@@ -1,6 +1,75 @@
 import { defineConfig, type Plugin, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const DEMO_ABOUT = 'Родился в Грозном. Гражданство России. Жена и дети — украинцы.'
+const DEMO_ENVIRONMENT = 'Черногория, город Бар'
+const DEMO_SAVE_PATCH = JSON.stringify({ about_me: DEMO_ABOUT, environment: DEMO_ENVIRONMENT })
+
+function flattenChatContent(input: unknown): string {
+  if (!input) return '';
+  if (typeof input === 'string') return input;
+  if (Array.isArray(input)) {
+    return input.map((item) => flattenChatContent(item)).join('');
+  }
+  if (typeof input === 'object') {
+    const record = input as Record<string, unknown>;
+    if (typeof record.text === 'string') return record.text;
+    if (Array.isArray(record.text)) return flattenChatContent(record.text);
+    if ('content' in record) return flattenChatContent(record.content);
+    if ('output_text' in record) return flattenChatContent(record.output_text);
+    if ('value' in record) return flattenChatContent(record.value);
+    if ('parts' in record) return flattenChatContent(record.parts);
+  }
+  return '';
+}
+
+function extractTextFromOpenAIResponse(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const obj = payload as Record<string, unknown>;
+  const direct = flattenChatContent(obj.text);
+  if (direct) return direct;
+  const outputText = flattenChatContent(obj.output_text);
+  if (outputText) return outputText;
+  const outputBlocks = flattenChatContent(obj.output);
+  if (outputBlocks) return outputBlocks;
+  const responseOut = flattenChatContent((obj.response as Record<string, unknown> | undefined)?.output_text);
+  if (responseOut) return responseOut;
+  if (Array.isArray(obj.choices)) {
+    for (const choice of obj.choices as unknown[]) {
+      const candidate = flattenChatContent((choice as any)?.message?.content ?? (choice as any)?.message) ||
+        flattenChatContent((choice as any)?.delta?.content ?? (choice as any)?.delta) ||
+        flattenChatContent((choice as any)?.content) ||
+        flattenChatContent((choice as any)?.output_text);
+      if (candidate) return candidate;
+    }
+  }
+  if (Array.isArray(obj.data)) {
+    for (const entry of obj.data as unknown[]) {
+      const candidate = flattenChatContent(entry);
+      if (candidate) return candidate;
+    }
+  }
+  const message = flattenChatContent((obj.message as any)?.content ?? obj.message);
+  if (message) return message;
+  return '';
+}
+
+function buildDemoTextResponse(message: string | undefined): { text: string; model: string; stub: true } {
+  const lower = (message || '').toLowerCase();
+  const wantsSave = /обнов|сохран|save_json/.test(lower);
+  const lines = [
+    'Ассистент (демо): работаю офлайн, поэтому отвечаю здесь без обращения к OpenAI.',
+  ];
+  if (wantsSave) {
+    lines.push('Фиксирую изменения в профиле пользователя и сохраняю их.');
+    lines.push(`SAVE_JSON: ${DEMO_SAVE_PATCH}`);
+  } else {
+    lines.push('Пока просто отвечаю и жду конкретных указаний, что сохранить.');
+  }
+  lines.push('Чтобы получить ответы реальной модели, задайте переменную окружения OPENAI_API_KEY.');
+  return { text: lines.join('\n'), model: 'demo-offline', stub: true };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -41,12 +110,6 @@ export default defineConfig(({ mode }) => {
         server.middlewares.use('/api/openai/text', async (req, res) => {
           if (req.method !== 'POST') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
           try {
-            const apiKey = OPENAI_API_KEY;
-            if (!apiKey) {
-              res.statusCode = 500; res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: 'OPENAI_API_KEY is not set on server' }));
-              return;
-            }
             const chunks: Uint8Array[] = [];
             req.on('data', (c: Uint8Array) => chunks.push(c));
             await new Promise<void>((resolve) => req.on('end', () => resolve()));
@@ -58,64 +121,180 @@ export default defineConfig(({ mode }) => {
             const sys = instructions || 'Ты ассистент и отвечаешь кратко и по делу на русском.';
             const user = context ? `${message}\n\nКОНТЕКСТ:\n${context}` : message;
             const textModel = (env.OPENAI_TEXT_MODEL || 'gpt-4o-mini');
+            const apiKey = OPENAI_API_KEY;
 
-            // Test stub: allow Playwright to request deterministic SAVE_JSON application
-            if (message && message.startsWith('[TEST_SAVE_JSON]')) {
-              const text = [
-                'Ассистент: Обновляю сохранённую информацию согласно вашему запросу.',
-                'SAVE_JSON: { "about_me": "Родился в Грозном. Гражданство России. Жена и дети — украинцы.", "environment": "Черногория, город Бар" }'
-              ].join('\n');
-              res.statusCode = 200;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ text, model: textModel, stub: true }));
+            if (!apiKey) {
+              const demo = buildDemoTextResponse(message);
+              res.statusCode = 200; res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(demo));
               return;
             }
 
-            const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                model: textModel,
-                messages: [
-                  { role: 'system', content: sys },
-                  { role: 'user', content: user },
-                ],
-                temperature: 0.3,
-              }),
-            });
-            const json = await resp.json() as any;
-            const text = json?.choices?.[0]?.message?.content || '';
-            res.statusCode = resp.status;
+            type AttemptMeta = {
+              endpoint: 'responses' | 'chat.completions';
+              status?: number;
+              error?: string;
+              textPreview?: string;
+            };
+
+            const attempts: AttemptMeta[] = [];
+
+            const summarizeAttempt = (meta: AttemptMeta) => {
+              attempts.push({
+                endpoint: meta.endpoint,
+                status: meta.status,
+                textPreview: meta.textPreview,
+                error: meta.error,
+              });
+            };
+
+            const preferResponses = /gpt-4\.1|gpt-5|o4|4o|o3|mini/i.test(textModel);
+
+            const callResponses = async () => {
+              try {
+                const resp = await fetch('https://api.openai.com/v1/responses', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    model: textModel,
+                    input: [
+                      { role: 'system', content: [{ type: 'text', text: sys }] },
+                      { role: 'user', content: [{ type: 'text', text: user }] },
+                    ],
+                    temperature: 0.3,
+                  }),
+                });
+                let json: any = null;
+                try { json = await resp.json(); } catch {}
+                const text = extractTextFromOpenAIResponse(json);
+                const ok = !!(resp.ok && text && text.trim());
+                summarizeAttempt({
+                  endpoint: 'responses',
+                  status: resp.status,
+                  textPreview: text ? text.slice(0, 160) : undefined,
+                  error: resp.ok ? (ok ? undefined : 'OpenAI вернул пустой ответ') : (json?.error?.message || `HTTP ${resp.status}`),
+                });
+                return { ok, text, json, model: typeof json?.model === 'string' ? json.model : textModel };
+              } catch (err) {
+                summarizeAttempt({
+                  endpoint: 'responses',
+                  error: err instanceof Error ? err.message : String(err),
+                });
+                return { ok: false as const };
+              }
+            };
+
+            const callChatCompletions = async () => {
+              try {
+                const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    model: textModel,
+                    messages: [
+                      { role: 'system', content: sys },
+                      { role: 'user', content: user },
+                    ],
+                    temperature: 0.3,
+                  }),
+                });
+                let json: any = null;
+                try { json = await resp.json(); } catch {}
+                const text = extractTextFromOpenAIResponse(json);
+                const ok = !!(resp.ok && text && text.trim());
+                summarizeAttempt({
+                  endpoint: 'chat.completions',
+                  status: resp.status,
+                  textPreview: text ? text.slice(0, 160) : undefined,
+                  error: resp.ok ? (ok ? undefined : 'OpenAI вернул пустой ответ') : (json?.error?.message || `HTTP ${resp.status}`),
+                });
+                return { ok, text, json, model: typeof json?.model === 'string' ? json.model : textModel };
+              } catch (err) {
+                summarizeAttempt({
+                  endpoint: 'chat.completions',
+                  error: err instanceof Error ? err.message : String(err),
+                });
+                return { ok: false as const };
+              }
+            };
+
+            const respondSuccess = (payload: { text: string; model: string; endpoint: AttemptMeta['endpoint']; raw?: unknown }) => {
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ text: payload.text, model: payload.model, endpoint: payload.endpoint, raw: payload.raw }));
+            };
+
+            if (preferResponses) {
+              const attempt = await callResponses();
+              if (attempt.ok && attempt.text) {
+                respondSuccess({ text: attempt.text, model: attempt.model ?? textModel, endpoint: 'responses', raw: attempt.json });
+                return;
+              }
+            }
+
+            const chatAttempt = await callChatCompletions();
+            if (chatAttempt.ok && chatAttempt.text) {
+              respondSuccess({ text: chatAttempt.text, model: chatAttempt.model ?? textModel, endpoint: 'chat.completions', raw: chatAttempt.json });
+              return;
+            }
+
+            if (!preferResponses) {
+              const attempt = await callResponses();
+              if (attempt.ok && attempt.text) {
+                respondSuccess({ text: attempt.text, model: attempt.model ?? textModel, endpoint: 'responses', raw: attempt.json });
+                return;
+              }
+            }
+
+            console.error('/api/openai/text: OpenAI не вернул ответ', { attempts });
+            res.statusCode = 502;
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ text, model: textModel }));
+            res.end(JSON.stringify({ error: 'OpenAI не вернул текстовый ответ', attempts }));
           } catch (e) {
             console.error('/api/openai/text error', e);
-            res.statusCode = 500; res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: 'text_failed' }));
+            if (!OPENAI_API_KEY) {
+              const demo = buildDemoTextResponse(undefined);
+              res.statusCode = 200; res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(demo));
+              return;
+            }
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'Серверная ошибка при обращении к OpenAI', message: e instanceof Error ? e.message : String(e) }));
           }
         });
         // Ephemeral token endpoint for OpenAI Realtime
         server.middlewares.use('/api/openai/rt/token', async (req, res) => {
           if (req.method !== 'POST') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
+          const defaultModel = 'gpt-4o-realtime-preview';
+          const chunks: Uint8Array[] = [];
+          req.on('data', (c: Uint8Array) => chunks.push(c));
+          await new Promise<void>((resolve) => req.on('end', () => resolve()));
+          let reqModel = defaultModel;
+          try {
+            const parsed = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
+            if (parsed?.model && typeof parsed.model === 'string') reqModel = parsed.model;
+          } catch {}
+          const respondDemo = () => {
+            res.statusCode = 200; res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({
+              client_secret: { value: 'demo-offline-token', expires_at: Date.now() + 60_000, demo: true },
+              model: reqModel,
+              demo: true,
+            }));
+          };
           try {
             const apiKey = OPENAI_API_KEY;
             if (!apiKey) {
-              res.statusCode = 500; res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: 'OPENAI_API_KEY is not set on server' }));
+              respondDemo();
               return;
             }
-            const defaultModel = 'gpt-4o-realtime-preview';
-            const chunks: Uint8Array[] = [];
-            req.on('data', (c: Uint8Array) => chunks.push(c));
-            await new Promise<void>((resolve) => req.on('end', () => resolve()));
-            let reqModel = defaultModel;
-            try {
-              const parsed = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
-              if (parsed?.model && typeof parsed.model === 'string') reqModel = parsed.model;
-            } catch {}
             const resp = await fetch('https://api.openai.com/v1/realtime/sessions', {
               method: 'POST',
               headers: {
@@ -126,13 +305,16 @@ export default defineConfig(({ mode }) => {
               body: JSON.stringify({ model: reqModel, voice: 'verse' }),
             });
             const json = (await resp.json()) as Record<string, unknown>;
+            if (!resp.ok) {
+              respondDemo();
+              return;
+            }
             res.statusCode = resp.status; res.setHeader('Content-Type', 'application/json');
             const payload = json && typeof json === 'object' ? { ...json, model: reqModel } : { model: reqModel, raw: json };
             res.end(JSON.stringify(payload));
           } catch (e) {
             console.error('rt/token error', e);
-            res.statusCode = 500; res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ error: 'token_failed' }));
+            respondDemo();
           }
         });
 

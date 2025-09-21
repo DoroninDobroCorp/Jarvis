@@ -24,6 +24,13 @@ test.describe('Active page sorting', () => {
   test('dates are strictly ascending by day', async ({ page }) => {
     await resetAndSeed(page);
     await page.goto('/active');
+    await page.waitForFunction(() => {
+      const store = (globalThis as any).__appStore;
+      if (!store?.getState) return false;
+      const nodes = store.getState().nodes;
+      return Array.isArray(nodes) && nodes.filter((n: any) => n?.type === 'task').length >= 3;
+    }, { timeout: 10_000 });
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="date-header"]').length >= 3, { timeout: 5_000 });
     const headers = page.locator('[data-testid="date-header"]');
     const count = await headers.count();
     expect(count).toBeGreaterThanOrEqual(3);

@@ -27,6 +27,10 @@ const DEFAULT_PROMPT = `Ты — внимательный психолог-ко�
 4) Пошаговый план (3–6 шагов) + первый микро-шаг на 5–10 минут.
 5) Если уместно, SAVE_JSON с обновлённым профилем (мотивы/ценности/ограничения/условия среды и т.п.).`;
 
+const DEMO_ABOUT = 'Родился в Грозном. Гражданство России. Жена и дети — украинцы.';
+const DEMO_ENVIRONMENT = 'Черногория, город Бар';
+const DEMO_SAVE_PATCH_STR = JSON.stringify({ about_me: DEMO_ABOUT, environment: DEMO_ENVIRONMENT });
+
 export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > = ({ open, onClose }) => {
   const log = getLogger('AssistantModal');
   const [tab, setTab] = useState<'prompt' | 'info' | 'chat'>('prompt');
@@ -54,8 +58,177 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
   const dataRef = useRef<RTCDataChannel | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const assistantBufRef = useRef<string>('');
+  const saveJsonBufferRef = useRef<string>('');
   const voiceRetriesRef = useRef<number>(0);
   const voiceStartTsRef = useRef<number>(0);
+  const voiceDemoActiveRef = useRef(false);
+  const voiceDemoTimerRef = useRef<number | null>(null);
+
+  function collectSaveJsonPatches(fragment: string): Array<Record<string, unknown>> {
+    if (!fragment) return [];
+    const marker = 'SAVE_JSON:';
+    saveJsonBufferRef.current += fragment;
+    let buffer = saveJsonBufferRef.current;
+    const patches: Array<Record<string, unknown>> = [];
+
+    const extractObject = (input: string, startIndex: number): { json: string; end: number } | null => {
+      let idx = input.indexOf('{', startIndex);
+      if (idx === -1) return null;
+      let inString = false;
+      let escape = false;
+      let depth = 0;
+      for (let i = idx; i < input.length; i += 1) {
+        const ch = input[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escape = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (ch === '{') depth += 1;
+          if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+              const json = input.slice(idx, i + 1);
+              return { json, end: i + 1 };
+            }
+          }
+        }
+      }
+      return null;
+    };
+
+    while (true) {
+      const idx = buffer.indexOf(marker);
+      if (idx === -1) break;
+      const afterMarker = idx + marker.length;
+      const objectInfo = extractObject(buffer, afterMarker);
+      if (!objectInfo) {
+        buffer = buffer.slice(idx);
+        break;
+      }
+      try {
+        const parsed = JSON.parse(objectInfo.json);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          patches.push(parsed as Record<string, unknown>);
+        }
+      } catch (e) {
+        log.warn('bad SAVE_JSON payload', { err: String(e) });
+      }
+      buffer = buffer.slice(objectInfo.end);
+    }
+
+    if (buffer.indexOf(marker) === -1) {
+      const keep = Math.max(marker.length * 2, 32);
+      buffer = buffer.slice(-keep);
+    }
+    saveJsonBufferRef.current = buffer;
+    return patches;
+  }
+
+  function applySaveJsonFromText(fragment: string) {
+    const patches = collectSaveJsonPatches(fragment);
+    if (!patches.length) return;
+    let changed = false;
+    setSavedInfo((prev) => {
+      let base: Record<string, unknown>;
+      try {
+        base = prev ? JSON.parse(prev) as Record<string, unknown> : {};
+      } catch (e) {
+        log.warn('savedInfo parse failed, resetting object', { err: String(e) });
+        base = {};
+      }
+      let next = { ...base };
+      let mutated = false;
+      for (const patch of patches) {
+        if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+          next = { ...next, ...patch };
+          mutated = true;
+        }
+      }
+      if (!mutated) return prev;
+      const normalized = JSON.stringify(next, null, 2);
+      if (normalized !== prev) {
+        changed = true;
+        return normalized;
+      }
+      return prev;
+    });
+    if (changed) {
+      setStatus('Применён SAVE_JSON от модели');
+    }
+  }
+
+  function flattenTextPayload(input: any): string {
+    if (!input) return '';
+    if (typeof input === 'string') return input;
+    if (Array.isArray(input)) {
+      return input.map((part) => flattenTextPayload(part)).join('');
+    }
+    if (typeof input === 'object') {
+      const maybeText = (input as Record<string, unknown>).text;
+      if (typeof maybeText === 'string') return maybeText;
+      if (Array.isArray(maybeText)) return flattenTextPayload(maybeText);
+      if ('content' in input) return flattenTextPayload((input as Record<string, unknown>).content);
+      if ('output_text' in input) return flattenTextPayload((input as Record<string, unknown>).output_text);
+      if ('value' in input) return flattenTextPayload((input as Record<string, unknown>).value);
+      if ('parts' in input) return flattenTextPayload((input as Record<string, unknown>).parts);
+    }
+    return '';
+  }
+
+  function extractReplyText(json: any): string {
+    if (!json || typeof json !== 'object') return '';
+    const direct = flattenTextPayload((json as any).text);
+    if (direct) return direct;
+    const outputText = flattenTextPayload((json as any).output_text);
+    if (outputText) return outputText;
+    const responseOutput = flattenTextPayload((json as any)?.response?.output_text);
+    if (responseOutput) return responseOutput;
+    const responseBlocks = flattenTextPayload((json as any)?.response?.output);
+    if (responseBlocks) return responseBlocks;
+    const outputBlocks = flattenTextPayload((json as any).output);
+    if (outputBlocks) return outputBlocks;
+    const choices = Array.isArray((json as any).choices) ? (json as any).choices : [];
+    for (const choice of choices) {
+      const candidate =
+        flattenTextPayload(choice?.message?.content ?? choice?.message) ||
+        flattenTextPayload(choice?.delta?.content ?? choice?.delta) ||
+        flattenTextPayload(choice?.content) ||
+        flattenTextPayload(choice?.output_text);
+      if (candidate) return candidate;
+    }
+    const data = Array.isArray((json as any).data) ? (json as any).data : [];
+    for (const item of data) {
+      const candidate = flattenTextPayload(item);
+      if (candidate) return candidate;
+    }
+    const message = flattenTextPayload((json as any).message?.content ?? (json as any).message);
+    if (message) return message;
+    return '';
+  }
+
+  function scheduleVoiceDemoMessage(lines: string[], applySave: boolean) {
+    if (typeof window === 'undefined') return;
+    if (voiceDemoTimerRef.current) {
+      window.clearTimeout(voiceDemoTimerRef.current);
+      voiceDemoTimerRef.current = null;
+    }
+    const text = lines.join('\n');
+    voiceDemoTimerRef.current = window.setTimeout(() => {
+      setMessages((arr) => [...arr, { role: 'assistant', text }]);
+      if (applySave) applySaveJsonFromText(text);
+      setStatus('Демо-режим: ответ готов (подключено)');
+      voiceDemoTimerRef.current = null;
+    }, 800);
+  }
 
   useEffect(() => {
     try { localStorage.setItem(PROMPT_KEY, prompt); } catch {}
@@ -73,22 +246,6 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
       audioRef.current.controls = false;
     }
   }, [open]);
-
-  function applySaveJsonPatchLine(line: string) {
-    try {
-      const idx = line.indexOf('SAVE_JSON:');
-      if (idx >= 0) {
-        const jsonStr = line.slice(idx + 'SAVE_JSON:'.length).trim();
-        const patch = JSON.parse(jsonStr);
-        const curr = JSON.parse(savedInfo || '{}');
-        const next = { ...curr, ...patch };
-        setSavedInfo(JSON.stringify(next, null, 2));
-        setStatus('Применён SAVE_JSON от модели');
-      }
-    } catch (e) {
-      log.warn('bad SAVE_JSON', { err: String(e) });
-    }
-  }
 
   async function sendContext(dc: RTCDataChannel) {
     try {
@@ -117,6 +274,36 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
       }
       voiceRetriesRef.current = 0;
       voiceStartTsRef.current = Date.now();
+      voiceDemoActiveRef.current = false;
+      if (voiceDemoTimerRef.current) {
+        window.clearTimeout(voiceDemoTimerRef.current);
+        voiceDemoTimerRef.current = null;
+      }
+      pcRef.current = null;
+      dataRef.current = null;
+
+      setStatus('Запрос токена для голосового режима...');
+      const tokenResp = await fetch('/api/openai/rt/token', { method: 'POST' });
+      if (!tokenResp.ok) throw new Error('Не удалось получить эфемерный токен');
+      const tokenJson = await tokenResp.json();
+
+      if (tokenJson?.demo) {
+        voiceDemoActiveRef.current = true;
+        setConnected(true);
+        setDcOpen(true);
+        dataRef.current = { readyState: 'open', send: () => {} } as unknown as RTCDataChannel;
+        setStatus('Демо-режим: голосовой ассистент подключен (без аудио)');
+        scheduleVoiceDemoMessage([
+          'Ассистент (демо-голос): подключение выполнено без аудио, поэтому отвечаю текстом.',
+          'Чтобы услышать настоящий голос, укажите переменную OPENAI_API_KEY на сервере.',
+        ], false);
+        return;
+      }
+
+      const secret = tokenJson?.client_secret?.value;
+      const model = typeof tokenJson?.model === 'string' ? tokenJson.model : 'gpt-4o-realtime-preview';
+      if (!secret) throw new Error('Сервер не вернул ключ для WebRTC');
+
       const pc = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -124,18 +311,15 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
       });
       pcRef.current = pc;
 
-      // outbound mic (only for voice mode)
-      if (mode === 'voice') {
-        try {
-          const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
-          for (const track of ms.getTracks()) pc.addTrack(track, ms);
-        } catch (e) {
-          log.warn('mic:not-available, continue recvonly', { err: String(e) });
-          setStatus('Микрофон недоступен — продолжаю в режиме приёма аудио');
-        }
-        // Mark as connected early to avoid instant UI flip
-        setConnected(true);
+      try {
+        const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+        for (const track of ms.getTracks()) pc.addTrack(track, ms);
+      } catch (e) {
+        log.warn('mic:not-available, continue recvonly', { err: String(e) });
+        setStatus('Микрофон недоступен — продолжаю в режиме приёма аудио');
       }
+      // Mark as connected early to avoid instant UI flip
+      setConnected(true);
 
       // ensure we also receive audio from the model
       try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
@@ -156,10 +340,8 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
         const sessionUpdate = { type: 'session.update', session: { instructions: prompt } };
         dc.send(JSON.stringify(sessionUpdate));
         void sendContext(dc);
-        if (mode === 'voice') {
-          const speak = { type: 'response.create', response: { modalities: ['text','audio'], instructions: 'Начнём: коротко спроси контекст и предложи фокус.' } };
-          dc.send(JSON.stringify(speak));
-        }
+        const speak = { type: 'response.create', response: { modalities: ['text', 'audio'], instructions: 'Начнём: коротко спроси контекст и предложи фокус.' } };
+        dc.send(JSON.stringify(speak));
       };
       dc.onclose = () => {
         setDcOpen(false);
@@ -171,32 +353,36 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
           const data = JSON.parse(msg.data);
           if (typeof data === 'object' && data?.type) {
             try { console.log('[assistant][evt]', data.type); } catch {}
-            if (data.type === 'response.delta' && typeof data.delta === 'string') {
-              const s = String(data.delta);
-              assistantBufRef.current += s;
-              applySaveJsonPatchLine(s);
-            } else if (data.type === 'response.output_text.delta' && typeof data.delta === 'string') {
-              const s = String(data.delta);
-              assistantBufRef.current += s;
-              applySaveJsonPatchLine(s);
+            if (data.type === 'response.delta') {
+              const deltaText = flattenTextPayload((data as any).delta);
+              if (deltaText) {
+                assistantBufRef.current += deltaText;
+                applySaveJsonFromText(deltaText);
+              }
+            } else if (data.type === 'response.output_text.delta') {
+              const deltaText = flattenTextPayload((data as any).delta);
+              if (deltaText) {
+                assistantBufRef.current += deltaText;
+                applySaveJsonFromText(deltaText);
+              }
             } else if (data.type === 'response.completed') {
-              const text = assistantBufRef.current.trim();
-              if (text) setMessages((arr) => [...arr, { role: 'assistant', text }]);
+              const responseText = flattenTextPayload((data as any)?.response?.output_text ?? (data as any)?.response?.output ?? (data as any)?.response);
+              const text = (responseText || assistantBufRef.current).trim();
+              if (text) {
+                setMessages((arr) => [...arr, { role: 'assistant', text }]);
+                applySaveJsonFromText(text);
+              }
               assistantBufRef.current = '';
             } else if (data.type === 'error' || data.type === 'response.error') {
               try { console.error('[assistant][evt:error]', data); } catch {}
             }
           } else if (typeof msg.data === 'string') {
-            applySaveJsonPatchLine(msg.data);
+            applySaveJsonFromText(msg.data);
           }
         } catch {
-          if (typeof msg.data === 'string') applySaveJsonPatchLine(msg.data);
+          if (typeof msg.data === 'string') applySaveJsonFromText(msg.data);
         }
       };
-
-      const tokenResp = await fetch('/api/openai/rt/token', { method: 'POST' });
-      if (!tokenResp.ok) throw new Error('Не удалось получить эфемерный токен');
-      const { client_secret, model } = await tokenResp.json();
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -206,10 +392,10 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
       await new Promise<void>((resolve) => {
         if (!pc) { resolve(); return; }
         if (pc.iceGatheringState === 'complete') { resolve(); return; }
-        const timeout = setTimeout(() => resolve(), 2000);
+        const timeout = window.setTimeout(() => resolve(), 2000);
         const check = () => {
           if (pc.iceGatheringState === 'complete') {
-            clearTimeout(timeout);
+            window.clearTimeout(timeout);
             pc.removeEventListener('icegatheringstatechange', check);
             resolve();
           }
@@ -221,12 +407,13 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
       const sdpResp = await fetch(realtimeUrl, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${client_secret.value}`,
+          'Authorization': `Bearer ${secret}`,
           'Content-Type': 'application/sdp',
           'OpenAI-Beta': 'realtime=v1',
         },
         body: (pc.localDescription?.sdp || offer.sdp || ''),
       });
+      if (!sdpResp.ok) throw new Error('Не удалось установить WebRTC-сессию');
       const answer = { type: 'answer', sdp: await sdpResp.text() };
       await pc.setRemoteDescription(answer as any);
 
@@ -250,14 +437,14 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
           const elapsed = Date.now() - voiceStartTsRef.current;
           const doDisconnect = () => { setConnected(false); setStatus('Отключено'); };
           if (elapsed < 3000) {
-            setTimeout(doDisconnect, 3000 - elapsed);
+            window.setTimeout(doDisconnect, 3000 - elapsed);
           } else {
             doDisconnect();
           }
           // Simple retry (max 2)
           if (voiceRetriesRef.current < 2 && mode === 'voice') {
             voiceRetriesRef.current += 1;
-            setTimeout(() => { void connect(); }, 1000);
+            window.setTimeout(() => { void connect(); }, 1000);
           }
         }
         if (st === 'closed') {
@@ -283,6 +470,13 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
     } finally {
       pcRef.current = null;
       dataRef.current = null;
+      assistantBufRef.current = '';
+      saveJsonBufferRef.current = '';
+      if (voiceDemoTimerRef.current) {
+        window.clearTimeout(voiceDemoTimerRef.current);
+        voiceDemoTimerRef.current = null;
+      }
+      voiceDemoActiveRef.current = false;
       setDcOpen(false);
       setConnected(false);
       setStatus('Отключено');
@@ -308,15 +502,25 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: text, instructions: prompt, context }),
           });
-          const json = await resp.json();
-          const reply = (json?.text as string) || '';
-          if (reply) setMessages((arr) => [...arr, { role: 'assistant', text: reply }]);
-          const usedModel = (json?.model as string) || 'unknown';
-          setStatus(reply ? `Ответ получен (${usedModel})` : 'Пустой ответ');
-          // Try to extract SAVE_JSON from reply
-          if (reply) {
-            reply.split('\n').forEach((line) => applySaveJsonPatchLine(line));
+          let json: any = null;
+          try { json = await resp.json(); } catch {}
+          if (!resp.ok) {
+            const errMsg = json?.error || json?.message || `HTTP ${resp.status}`;
+            setStatus(`Ошибка текстового запроса: ${String(errMsg)}`);
+            return;
           }
+          const replyRaw = extractReplyText(json);
+          const reply = (replyRaw || '').trim();
+          if (reply) {
+            setMessages((arr) => [...arr, { role: 'assistant', text: reply }]);
+          } else {
+            try { console.warn('[assistant][text] пустой ответ от API', json); } catch {}
+          }
+          const usedModel = (json && typeof json.model === 'string' && json.model) ||
+            (json && typeof json?.response?.model === 'string' && json.response.model) || 'unknown';
+          setStatus(reply ? `Ответ получен (${usedModel})` : 'Ответ пуст — проверьте настройки');
+          // Try to extract SAVE_JSON from reply
+          if (replyRaw) applySaveJsonFromText(replyRaw);
         } catch (e) {
           console.error(e);
           setStatus('Ошибка текстового запроса');
@@ -324,6 +528,22 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void } > =
         return;
       }
       // Voice (WebRTC) mode
+      if (voiceDemoActiveRef.current) {
+        setStatus('Демо-режим: формирую ответ...');
+        const includeSave = /обнов|сохран|save_json/.test(text.toLowerCase());
+        const lines = [
+          `Ассистент (демо-голос): получил ваше сообщение: "${text}".`,
+        ];
+        if (includeSave) {
+          lines.push('Фиксирую изменения и сохраняю их в профиле пользователя.');
+          lines.push(`SAVE_JSON: ${DEMO_SAVE_PATCH_STR}`);
+        } else {
+          lines.push('Могу сохранить профиль — просто уточните, что именно нужно обновить.');
+        }
+        lines.push('Чтобы услышать настоящий голос, укажите переменную OPENAI_API_KEY.');
+        scheduleVoiceDemoMessage(lines, includeSave);
+        return;
+      }
       if (!dc || dc.readyState !== 'open') {
         setStatus('Канал данных не готов — подождите, идёт подключение...');
         return;
