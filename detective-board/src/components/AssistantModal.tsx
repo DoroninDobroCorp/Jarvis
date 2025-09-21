@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { getLogger } from '../logger';
 import {
@@ -85,6 +85,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
   const [statusMessages, setStatusMessages] = useState<StatusEntry[]>([]);
   const autoConnectRef = useRef(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
   const voiceRef = useRef<VoiceConnectionHandle | null>(null);
   const voiceDemoTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -178,15 +179,17 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
     wasOpenRef.current = open;
   }, [open]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
-    try {
-      const el = transcriptRef.current;
-      if (el) {
-        el.scrollTop = el.scrollHeight;
-      }
-    } catch {}
-  }, [messages, open]);
+    const anchor = bottomRef.current;
+    if (!anchor) return;
+    const rafId = requestAnimationFrame(() => {
+      try {
+        anchor.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      } catch {}
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [messages.length, open]);
 
   async function connectVoice() {
     if (voiceConnected) return;
@@ -316,7 +319,14 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
         }
       } else {
         const message = err instanceof Error ? err.message : String(err);
-        pushStatus(`Ошибка текстового запроса: ${message}`, 'error');
+        pushStatus(`Ошибка запроса к OpenAI (${message}) — пробую Google…`, 'error');
+        try {
+          await doRequest('/api/google/text', 'Google');
+        } catch (err2) {
+          log.error('assistant:text:fallback_failed', err2);
+          const fallbackMessage = err2 instanceof Error ? err2.message : String(err2);
+          pushStatus(`Ошибка текстового запроса: ${fallbackMessage}`, 'error');
+        }
       }
     }
   }
@@ -364,6 +374,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
         style={{
           width: 'min(1120px, 94vw)',
           height: '90vh',
+          minHeight: 0,
           background: '#0f1418',
           color: '#f5f5f5',
           borderRadius: 18,
@@ -390,7 +401,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
           <button className={classNames('tool-btn', tab === 'info' && 'active')} onClick={() => setTab('info')}>Сохранённая информация</button>
         </div>
         {tab === 'chat' ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0 24px 24px' }}>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 24px 24px', overflow: 'hidden' }}>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 Режим
@@ -437,8 +448,9 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
                 ))}
               </div>
             ) : null}
-            <div ref={transcriptRef} data-testid="assistant-transcript" style={{ flex: 1, overflowY: 'auto', border: '1px solid #1f2b34', borderRadius: 10, padding: 16, background: '#131c22' }}>
+            <div ref={transcriptRef} data-testid="assistant-transcript" style={{ flex: 1, minHeight: 0, maxHeight: '100%', overflowY: 'auto', border: '1px solid #1f2b34', borderRadius: 10, padding: 16, background: '#131c22' }}>
               {messages.length ? transcript : <div style={{ color: '#6c7a84' }}>Сообщений за сегодня ещё нет.</div>}
+              <div ref={bottomRef} />
             </div>
             <div style={{ marginTop: 12, display: 'flex', alignItems: 'flex-end', gap: 12 }}>
               <textarea

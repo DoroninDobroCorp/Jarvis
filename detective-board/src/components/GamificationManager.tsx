@@ -7,6 +7,7 @@ import {
   type LevelUpEvent,
 } from '../gamification';
 import { extractAssistantText } from '../assistant/api';
+import { callAssistantApi } from '../assistant/apiClient';
 
 interface QueueItem {
   task: TaskPathInfo;
@@ -44,19 +45,7 @@ async function requestLevelTitleSuggestions(event: LevelUpEvent): Promise<string
     'Не используй общий текст, только список вариантов.',
   ].join('\n');
   try {
-    const resp = await fetch('/api/openai/text', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, instructions, context: '' }),
-    });
-    let payload: unknown = null;
-    try { payload = await resp.json(); } catch {}
-    if (!resp.ok) {
-      const errText = typeof payload === 'object' && payload && 'error' in (payload as Record<string, unknown>)
-        ? String((payload as Record<string, unknown>).error)
-        : `HTTP ${resp.status}`;
-      throw new Error(errText);
-    }
+    const payload = await callAssistantApi({ message, instructions, context: '' });
     const { text } = extractAssistantText(payload);
     const parsed = parseSuggestions(text);
     if (parsed.length) return parsed;

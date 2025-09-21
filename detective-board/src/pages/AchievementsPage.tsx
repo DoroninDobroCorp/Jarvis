@@ -6,6 +6,7 @@ import {
 } from '../gamification';
 import { getSnapshot, ymd } from '../wellbeing';
 import { extractAssistantText } from '../assistant/api';
+import { callAssistantApi } from '../assistant/apiClient';
 import type { Achievement } from '../gamification';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
 
@@ -69,20 +70,8 @@ async function generateBadgeImage(title: string, description: string): Promise<s
   const instructions = 'Ты — дизайнер наград. Ответь JSON вида {"emoji":"🎯","bg":"#123456","accent":"#abcdef"}.';
   const message = `Название: ${title}\nОписание: ${description}\nПодбери яркую эмоцию и цвета.`;
   try {
-    const resp = await fetch('/api/openai/text', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, instructions, context: '' }),
-    });
-    let payload: unknown = null;
-    try { payload = await resp.json(); } catch {}
-    if (!resp.ok) {
-      const errText = typeof payload === 'object' && payload && 'error' in (payload as Record<string, unknown>)
-        ? String((payload as Record<string, unknown>).error)
-        : `HTTP ${resp.status}`;
-      throw new Error(errText);
-    }
-    const { text } = extractAssistantText(payload);
+    const json = await callAssistantApi({ message, instructions, context: '' });
+    const { text } = extractAssistantText(json);
     const meta = parseBadgeMeta(text);
     const [bgFallback, accentFallback] = randomPalette(Math.abs(title.length + description.length));
     return createBadgeSvg(title, meta.emoji || '🏆', meta.bg || bgFallback, meta.accent || accentFallback);
