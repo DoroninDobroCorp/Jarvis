@@ -160,16 +160,21 @@ const CompletedTasksPage: React.FC = () => {
   const groups: CompletedGroup[] = useMemo(() => {
     const map = new Map<string, CompletedEntry[]>();
     combinedEntries.forEach((entry) => {
-      const key = entry.completedAt ? new Date(entry.completedAt).toISOString().slice(0, 10) : '__NO_DATE__';
+      // Use local date key (YYYY-MM-DD) to avoid UTC shifting to previous day
+      const key = entry.completedAt ? ymd(new Date(entry.completedAt)) : '__NO_DATE__';
       const arr = map.get(key) ?? [];
       arr.push(entry);
       map.set(key, arr);
     });
     const keys = Array.from(map.keys());
+    const dateMs = (s: string) => {
+      const [yy, mm, dd] = s.split('-').map(Number);
+      return new Date(yy, (mm || 1) - 1, dd || 1).getTime();
+    };
     keys.sort((a, b) => {
       if (a === '__NO_DATE__') return 1;
       if (b === '__NO_DATE__') return -1;
-      return new Date(b + 'T00:00:00Z').getTime() - new Date(a + 'T00:00:00Z').getTime();
+      return dateMs(b) - dateMs(a);
     });
     return keys.map((key) => {
       const entries = (map.get(key) ?? []).slice().sort((a, b) => {
@@ -180,12 +185,16 @@ const CompletedTasksPage: React.FC = () => {
       const isNoDate = key === '__NO_DATE__';
       const label = isNoDate
         ? 'Без даты'
-        : new Date(key + 'T00:00:00Z').toLocaleDateString('ru-RU', {
-            weekday: 'short',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-          });
+        : (() => {
+            const [yy, mm, dd] = key.split('-').map(Number);
+            const d = new Date(yy, (mm || 1) - 1, dd || 1);
+            return d.toLocaleDateString('ru-RU', {
+              weekday: 'short',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+            });
+          })();
       const xp = isNoDate
         ? entries.reduce((sum, entry) => sum + (entry.xp ?? 0), 0)
         : xpByDay.get(key) ?? 0;

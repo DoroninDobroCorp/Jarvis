@@ -44,10 +44,20 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
   let started = false;
 
   const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, payload?: Record<string, unknown>) => {
-    const time = new Date().toISOString();
+    const now = new Date();
+    // Local ISO-like with timezone offset, e.g. 2025-09-23T00:56:50+02:00
+    const tzMin = -now.getTimezoneOffset();
+    const sign = tzMin >= 0 ? '+' : '-';
+    const absMin = Math.abs(tzMin);
+    const offH = String(Math.floor(absMin / 60)).padStart(2, '0');
+    const offM = String(absMin % 60).padStart(2, '0');
+    const localIso = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+      .toISOString()
+      .replace('Z', `${sign}${offH}:${offM}`);
     const base = `[tg:${level}] ${message}`;
-    if (payload) console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : level === 'debug' ? 'log' : 'info'](`${time} ${base}`, payload);
-    else console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : level === 'debug' ? 'log' : 'info'](`${time} ${base}`);
+    const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : level === 'debug' ? 'log' : 'info';
+    if (payload) console[method](`${localIso} ${base}`, payload);
+    else console[method](`${localIso} ${base}`);
   };
 
   const clampRating = (n: number) => Math.min(10, Math.max(1, Math.round(n)));
@@ -160,7 +170,13 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
       if (result) sent += 1;
     }
     log('info', 'question sent', { sent, targets: chatIds.size });
-    scheduleNextQuestion();
+    if (sent === 0) {
+      // Network might be down; retry soon instead of waiting for the next fixed slot
+      const retryDelay = Math.min(2 * 60_000, computeNextSlotDelayMs(new Date()));
+      scheduleNextQuestion(retryDelay);
+    } else {
+      scheduleNextQuestion();
+    }
   };
 
   const pollUpdates = async () => {
