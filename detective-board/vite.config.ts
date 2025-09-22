@@ -2,6 +2,264 @@
 import { defineConfig, type Plugin, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
+type TelegramRatingEntry = {
+  awareness: number;
+  efficiency: number;
+  joy: number;
+  ts: number;
+};
+
+type TelegramService = {
+  start: () => void;
+  stop: () => void;
+  drainPending: () => TelegramRatingEntry[];
+  scheduleNextQuestion: (delayMs?: number) => void;
+};
+
+interface TelegramServiceOptions {
+  token?: string;
+  defaultDelayMs?: number;
+}
+
+function createTelegramWellbeingService(options: TelegramServiceOptions): TelegramService {
+  const token = (options.token || '').trim();
+  const defaultDelayMs = options.defaultDelayMs ?? 60_000;
+  const disabledService: TelegramService = {
+    start: () => { console.warn(`[tg] TELEGRAM_BOT_TOKEN is not configured, Telegram integration disabled.`); },
+    stop: () => {},
+    drainPending: () => [],
+    scheduleNextQuestion: () => {},
+  };
+  if (!token) {
+    return disabledService;
+  }
+
+  const apiBase = `https://api.telegram.org/bot${token}`;
+  const pending: TelegramRatingEntry[] = [];
+  const chatIds = new Set<number>();
+  let pollOffset = 0;
+  let polling = false;
+  let pollInterval: NodeJS.Timeout | null = null;
+  let scheduleTimer: NodeJS.Timeout | null = null;
+  let started = false;
+
+  const log = (level: 'debug' | 'info' | 'warn' | 'error', message: string, payload?: Record<string, unknown>) => {
+    const time = new Date().toISOString();
+    const base = `[tg:${level}] ${message}`;
+    if (payload) console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : level === 'debug' ? 'log' : 'info'](`${time} ${base}`, payload);
+    else console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : level === 'debug' ? 'log' : 'info'](`${time} ${base}`);
+  };
+
+  const clampRating = (n: number) => Math.min(10, Math.max(1, Math.round(n)));
+
+  const sendRequest = async <T = unknown>(path: string, init?: RequestInit): Promise<T | undefined> => {
+    try {
+      const resp = await fetch(`${apiBase}${path}`, {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+      });
+      const json = await resp.json() as { ok?: boolean } & T;
+      if (!resp.ok || (json as { ok?: boolean }).ok === false) {
+        log('warn', 'telegram request failed', { path, status: resp.status, body: json });
+        return undefined;
+      }
+      return json;
+    } catch (error) {
+      log('error', 'telegram request threw', { path, error: error instanceof Error ? error.message : String(error) });
+      return undefined;
+    }
+  };
+
+  const sendMessage = async (chatId: number, text: string) => {
+    await sendRequest('/sendMessage', {
+      method: 'POST',
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  };
+
+  const storeRatings = async (chatId: number, awareness: number, efficiency: number, joy: number, sourceTs: number | undefined) => {
+    const entry: TelegramRatingEntry = {
+      awareness: clampRating(awareness),
+      efficiency: clampRating(efficiency),
+      joy: clampRating(joy),
+      ts: sourceTs ? sourceTs * 1000 : Date.now(),
+    };
+    pending.push(entry);
+    log('info', 'rating captured', { chatId, awareness: entry.awareness, efficiency: entry.efficiency, joy: entry.joy });
+    await sendMessage(chatId, `Записал: осознанность ${entry.awareness}, эффективность ${entry.efficiency}, удовольствие ${entry.joy}.`);
+  };
+
+  const parseAndStoreRatings = async (chatId: number, text: string, msgTs: number | undefined) => {
+    const trimmed = text.trim();
+    const match = trimmed.match(/^(?:wb\s+)?(\d{1,2})[\s,;]+(\d{1,2})[\s,;]+(\d{1,2})$/i);
+    if (!match) return false;
+    const [aw, ef, joy] = match.slice(1, 4).map((val) => clampRating(Number(val)));
+    await storeRatings(chatId, aw, ef, joy, msgTs);
+    return true;
+  };
+
+  const handleCallbackQuery = async (callback: any) => {
+    if (!callback || typeof callback !== 'object') return;
+    const data = typeof callback.data === 'string' ? callback.data : '';
+    const chatId = callback.message?.chat?.id;
+    if (typeof chatId !== 'number') return;
+    chatIds.add(chatId);
+    if (data.startsWith('wb:')) {
+      const parts = data.slice(3).split(':');
+      if (parts.length === 3) {
+        const nums = parts.map((part) => clampRating(Number(part)));
+        await storeRatings(chatId, nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 0, callback.message?.date);
+      }
+    }
+  };
+
+  const handleMessage = async (message: any) => {
+    if (!message || typeof message !== 'object') return;
+    const chatId = message.chat?.id;
+    if (typeof chatId !== 'number') return;
+    chatIds.add(chatId);
+    if (typeof message.text === 'string') {
+      const text: string = message.text;
+      if (text.startsWith('/start')) {
+        await sendMessage(chatId, 'Привет! Я буду периодически спрашивать про самочувствие. Ответь в формате "wb 7 8 9" (осознанность, эффективность, удовольствие) или нажми кнопки в опросе.');
+        return;
+      }
+      if (text.startsWith('/ping')) {
+        await sendMessage(chatId, 'pong');
+        return;
+      }
+      const parsed = await parseAndStoreRatings(chatId, text, message.date);
+      if (parsed) return;
+    }
+  };
+
+  const sendQuestion = async () => {
+    if (chatIds.size === 0) {
+      log('warn', 'question skipped, no chat ids yet');
+      scheduleNextQuestion(30_000);
+      return;
+    }
+    const text = 'Как твоё состояние? Пришли ответы в формате "wb 7 8 9" (осознанность / эффективность / удовольствие) или воспользуйся кнопками ниже.';
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '5 / 5 / 5', callback_data: 'wb:5:5:5' },
+          { text: '7 / 7 / 7', callback_data: 'wb:7:7:7' },
+          { text: '9 / 9 / 9', callback_data: 'wb:9:9:9' },
+        ],
+        [
+          { text: '10 / 8 / 6', callback_data: 'wb:10:8:6' },
+          { text: '6 / 8 / 10', callback_data: 'wb:6:8:10' },
+        ],
+      ],
+    };
+    let sent = 0;
+    for (const chatId of chatIds) {
+      const payload = { chat_id: chatId, text, reply_markup: keyboard };
+      const result = await sendRequest('/sendMessage', { method: 'POST', body: JSON.stringify(payload) });
+      if (result) sent += 1;
+    }
+    log('info', 'question sent', { sent, targets: chatIds.size });
+    scheduleNextQuestion();
+  };
+
+  const pollUpdates = async () => {
+    if (polling) return;
+    polling = true;
+    try {
+      const qs = new URLSearchParams({ timeout: '0', offset: String(pollOffset) }).toString();
+      const resp = await fetch(`${apiBase}/getUpdates?${qs}`);
+      const data = await resp.json() as { ok?: boolean; result?: any[] };
+      if (!resp.ok || !data.ok) {
+        log('warn', 'getUpdates failed', { status: resp.status, body: data });
+        return;
+      }
+      const updates = Array.isArray(data.result) ? data.result : [];
+      for (const update of updates) {
+        if (typeof update?.update_id === 'number') pollOffset = Math.max(pollOffset, update.update_id + 1);
+        if (update.message) await handleMessage(update.message);
+        if (update.callback_query) await handleCallbackQuery(update.callback_query);
+      }
+    } catch (error) {
+      log('error', 'polling error', { error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      polling = false;
+    }
+  };
+
+  const ensurePolling = () => {
+    if (pollInterval) return;
+    pollInterval = setInterval(() => { void pollUpdates(); }, 5_000);
+    void pollUpdates();
+  };
+
+  // Compute delay to the next fixed local-time slot (11:30, 14:30, 17:30, 20:30, 23:30)
+  const computeNextSlotDelayMs = (from: Date = new Date()): number => {
+    try {
+      const slots: Array<{ h: number; m: number }> = [
+        { h: 11, m: 30 },
+        { h: 14, m: 30 },
+        { h: 17, m: 30 },
+        { h: 20, m: 30 },
+        { h: 23, m: 30 },
+      ];
+      const y = from.getFullYear();
+      const mo = from.getMonth();
+      const d = from.getDate();
+      for (const s of slots) {
+        const cand = new Date(y, mo, d, s.h, s.m, 0, 0);
+        if (cand.getTime() > from.getTime()) {
+          return Math.max(1_000, cand.getTime() - from.getTime());
+        }
+      }
+      // If all slots passed today, schedule tomorrow at 11:30
+      const tomorrow = new Date(y, mo, d + 1, 11, 30, 0, 0);
+      return Math.max(1_000, tomorrow.getTime() - from.getTime());
+    } catch (e) {
+      // fallback to default delay on error
+      return Math.max(1_000, defaultDelayMs);
+    }
+  };
+
+  const scheduleNextQuestion = (delayMs?: number) => {
+    const delay = typeof delayMs === 'number' ? Math.max(1_000, delayMs) : computeNextSlotDelayMs(new Date());
+    if (scheduleTimer) clearTimeout(scheduleTimer);
+    const plannedAt = Date.now() + delay;
+    scheduleTimer = setTimeout(() => { void sendQuestion(); }, delay);
+    log('info', 'next question scheduled', { delayMs: delay, plannedAt });
+  };
+
+  const start = () => {
+    if (started) return;
+    started = true;
+    log('info', 'service starting');
+    ensurePolling();
+    scheduleNextQuestion();
+  };
+
+  const stop = () => {
+    if (!started) return;
+    started = false;
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    if (scheduleTimer) { clearTimeout(scheduleTimer); scheduleTimer = null; }
+    log('info', 'service stopped');
+  };
+
+  const drainPending = () => {
+    if (pending.length === 0) return [];
+    const items = pending.splice(0, pending.length);
+    log('debug', 'draining pending ratings', { count: items.length });
+    return items;
+  };
+
+  return {
+    start,
+    stop,
+    drainPending,
+    scheduleNextQuestion,
+  };
+}
+
 // Demo helper for OpenAI text when API key is absent
 function buildDemoTextResponse(message: string | undefined): { text: string; model: string; stub: true } {
   const lower = (message || '').toLowerCase();
@@ -36,7 +294,25 @@ export default defineConfig(({ mode }) => {
         name: 'client-log-endpoint',
         apply: 'serve',
         configureServer(server) {
-          // ... (код логгирования и другие middleware)
+          const telegramService = createTelegramWellbeingService({ token: TELEGRAM_BOT_TOKEN, defaultDelayMs: 60_000 });
+          telegramService.start();
+          server.httpServer?.once('close', () => { telegramService.stop(); });
+
+          server.middlewares.use('/api/tg/pending', (req, res) => {
+            if (req.method !== 'GET') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
+            const items = telegramService.drainPending();
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ items }));
+          });
+
+          server.middlewares.use('/api/tg/schedule', (req, res) => {
+            if (req.method !== 'POST') { res.statusCode = 405; res.end('Method Not Allowed'); return; }
+            telegramService.scheduleNextQuestion(1_000);
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: true }));
+          });
 
           // Text completion endpoint (Google Gemini)
           server.middlewares.use('/api/google/text', async (req, res) => {

@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { aggregateDay, aggregateMonth, getDailyMap, getRawMap, lastScheduledSlotsForDay, nearestSlotKey, recordEntry, ymd, ym } from '../wellbeing';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { aggregateDay, aggregateMonth, computeWellbeingBonuses, getDailyMap, getRawMap, lastScheduledSlotsForDay, nearestSlotKey, recordEntry, ymd, ym } from '../wellbeing';
+import { useGamificationStore } from '../gamification';
 
 const ASKED_KEY = 'WB_ASKED_SLOTS_BY_DAY';
 
@@ -26,7 +27,24 @@ export const WellbeingManager: React.FC = () => {
   const [slot, setSlot] = useState<string | null>(null);
   const lastDayRef = useRef<string>(ymd());
   const lastMonthRef = useRef<string>(ym());
+  const markBonusClaimed = useGamificationStore((s) => s.markBonusClaimed);
   const localPromptsOn = (() => { try { return localStorage.getItem('WB_LOCAL_PROMPTS') === '1'; } catch { return false; } })();
+
+  const syncBonuses = useCallback(() => {
+    try {
+      const bonuses = computeWellbeingBonuses();
+      for (const [dateKey, info] of Object.entries(bonuses)) {
+        markBonusClaimed(dateKey, info.xp, {
+          awareness: info.avg.awareness,
+          efficiency: info.avg.efficiency,
+          joy: info.avg.joy,
+          count: info.avg.count,
+        });
+      }
+    } catch {
+      // игнорируем ошибки синхронизации, повторим при следующем цикле
+    }
+  }, [markBonusClaimed]);
 
   // Ensure past days are aggregated on load
   useEffect(() => {
@@ -42,8 +60,9 @@ export const WellbeingManager: React.FC = () => {
         const nowM = ym();
         if (m < nowM) aggregateMonth(m);
       }
+      syncBonuses();
     } catch {}
-  }, []);
+  }, [syncBonuses]);
 
   useEffect(() => {
     if (!localPromptsOn) return;
@@ -88,10 +107,11 @@ export const WellbeingManager: React.FC = () => {
         for (const it of items) {
           recordEntry({ awareness: it.awareness, efficiency: it.efficiency, joy: it.joy, ts: it.ts });
         }
+        if (items.length > 0) syncBonuses();
       } catch {}
     }, 15 * 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [syncBonuses]);
 
   function markAsked() {
     const today = ymd();
@@ -106,6 +126,7 @@ export const WellbeingManager: React.FC = () => {
   function submit() {
     try {
       recordEntry({ awareness, efficiency, joy });
+      syncBonuses();
       markAsked();
     } finally {
       setAskOpen(false);
@@ -119,6 +140,10 @@ export const WellbeingManager: React.FC = () => {
       setSlot(null);
     }
   }
+
+  useEffect(() => {
+    syncBonuses();
+  }, [syncBonuses]);
 
   if (!askOpen) return null;
   return (

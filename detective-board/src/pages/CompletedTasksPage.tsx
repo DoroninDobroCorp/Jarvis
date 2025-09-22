@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store';
 import type { TaskNode, BookItem, MovieItem, GameItem, PurchaseItem } from '../types';
@@ -7,18 +7,55 @@ import { db } from '../db';
 import SmartImage from '../components/SmartImage';
 import { buildFallbackList } from '../imageSearch';
 import { useGamificationStore } from '../gamification';
+import { ymd } from '../wellbeing';
 
-export const CompletedTasksPage: React.FC = () => {
+type ManualCategory = 'book' | 'movie' | 'game' | 'purchase';
+
+type ManualItem = BookItem | MovieItem | GameItem | PurchaseItem;
+
+type CompletedEntry =
+  | {
+      kind: 'task';
+      key: string;
+      completedAt: number | null;
+      xp?: number;
+      node: TaskNode;
+    }
+  | {
+      kind: 'manual';
+      key: string;
+      completedAt: number | null;
+      xp?: number;
+      category: ManualCategory;
+      item: ManualItem;
+    };
+
+interface CompletedGroup {
+  key: string;
+  label: string;
+  xp: number;
+  entries: CompletedEntry[];
+}
+
+function xpBadgeValue(amount: number | undefined): string {
+  if (typeof amount !== 'number') return 'XP: —';
+  if (amount === 0) return 'XP: 0';
+  return amount > 0 ? `XP: +${amount}` : `XP: ${amount}`;
+}
+
+const CompletedTasksPage: React.FC = () => {
   const nodes = useAppStore((s) => s.nodes);
   const removeNode = useAppStore((s) => s.removeNode);
-  const completions = useGamificationStore((s) => s.completions);
   const revealNode = useAppStore((s) => s.revealNode);
+  const completions = useGamificationStore((s) => s.completions);
+  const xpHistory = useGamificationStore((s) => s.xpHistory);
   const navigate = useNavigate();
   const log = getLogger('CompletedTasks');
-  const [books, setBooks] = React.useState<BookItem[]>([]);
-  const [movies, setMovies] = React.useState<MovieItem[]>([]);
-  const [games, setGames] = React.useState<GameItem[]>([]);
-  const [purchases, setPurchases] = React.useState<PurchaseItem[]>([]);
+
+  const [books, setBooks] = useState<BookItem[]>([]);
+  const [movies, setMovies] = useState<MovieItem[]>([]);
+  const [games, setGames] = useState<GameItem[]>([]);
+  const [purchases, setPurchases] = useState<PurchaseItem[]>([]);
 
   const completionByTaskId = useMemo(() => {
     const map = new Map<string, number>();
@@ -28,55 +65,37 @@ export const CompletedTasksPage: React.FC = () => {
     return map;
   }, [completions]);
 
-  const xpLabel = (xpAmount: number | undefined) => (
-    typeof xpAmount === 'number' ? `Опыт: +${xpAmount}` : 'Опыт: не начислялся'
-  );
+  const xpByDay = useMemo(() => {
+    const map = new Map<string, number>();
+    xpHistory.forEach((entry) => {
+      const key = ymd(new Date(entry.ts));
+      const prev = map.get(key) ?? 0;
+      map.set(key, prev + entry.amount);
+    });
+    return map;
+  }, [xpHistory]);
 
-  const taskXpAmount = (taskId: string) => completionByTaskId.get(taskId);
-  const manualXpAmount = (prefix: string, itemId: string, completedAt?: number | null) => (
-    typeof completedAt === 'number' ? completionByTaskId.get(`${prefix}:${itemId}:${completedAt}`) : undefined
-  );
+  const manualXpAmount = useCallback((category: ManualCategory, item: ManualItem) => {
+    if (typeof item.completedAt !== 'number') return undefined;
+    const key = `${category}:${item.id}:${item.completedAt}`;
+    return completionByTaskId.get(key);
+  }, [completionByTaskId]);
 
   const doneTasks = useMemo(() => {
     return nodes
       .filter((n): n is TaskNode => n.type === 'task' && n.status === 'done')
       .slice()
       .sort((a, b) => {
-        const at = typeof a.completedAt === 'number' ? a.completedAt : 0;
-        const bt = typeof b.completedAt === 'number' ? b.completedAt : 0;
-        // новые (позже выполненные) — выше
+        const at = typeof a.completedAt === 'number' ? a.completedAt : a.updatedAt ?? 0;
+        const bt = typeof b.completedAt === 'number' ? b.completedAt : b.updatedAt ?? 0;
         return bt - at;
       });
   }, [nodes]);
-
-  const grouped = useMemo(() => {
-    const groups = new Map<string, TaskNode[]>();
-    doneTasks.forEach((t) => {
-      const key = typeof t.completedAt === 'number' ? new Date(t.completedAt).toISOString().slice(0, 10) : '__NO_DATE__';
-      const arr = groups.get(key) || [];
-      arr.push(t);
-      groups.set(key, arr);
-    });
-    const dateKeys = Array.from(groups.keys())
-      .filter((k) => k !== '__NO_DATE__')
-      .sort((a, b) => new Date(b + 'T00:00:00Z').getTime() - new Date(a + 'T00:00:00Z').getTime());
-    const result: Array<{ key: string; label: string; tasks: TaskNode[] }> = [];
-    dateKeys.forEach((k) => {
-      const d = new Date(k + 'T00:00:00Z');
-      const label = d.toLocaleDateString('ru-RU', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' });
-      result.push({ key: k, label, tasks: groups.get(k)! });
-    });
-    if (groups.has('__NO_DATE__')) {
-      result.push({ key: '__NO_DATE__', label: 'Без даты', tasks: groups.get('__NO_DATE__')! });
-    }
-    return result;
-  }, [doneTasks]);
 
   useEffect(() => {
     log.info('doneTasks:update', { count: doneTasks.length });
   }, [doneTasks.length, log]);
 
-  // Load done items from IndexedDB on mount
   useEffect(() => {
     void (async () => {
       const [b, m, g, p] = await Promise.all([
@@ -85,71 +104,251 @@ export const CompletedTasksPage: React.FC = () => {
         db.games.toArray(),
         db.purchases.toArray().catch(() => [] as PurchaseItem[]),
       ]);
-      setBooks(b.filter((x) => x.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)));
-      setMovies(m.filter((x) => x.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)));
-      setGames(g.filter((x) => x.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)));
-      setPurchases(p.filter((x) => x.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)));
+      setBooks(b.filter((x) => x.status === 'done'));
+      setMovies(m.filter((x) => x.status === 'done'));
+      setGames(g.filter((x) => x.status === 'done'));
+      setPurchases(p.filter((x) => x.status === 'done'));
     })();
   }, []);
+
+  const combinedEntries = useMemo(() => {
+    const entries: CompletedEntry[] = [];
+
+    doneTasks.forEach((task) => {
+      const completedAt = typeof task.completedAt === 'number'
+        ? task.completedAt
+        : typeof task.updatedAt === 'number'
+          ? task.updatedAt
+          : task.createdAt ?? null;
+      entries.push({
+        kind: 'task',
+        key: `task:${task.id}`,
+        completedAt,
+        xp: completionByTaskId.get(task.id),
+        node: task,
+      });
+    });
+
+    const manualCollections: Array<{ category: ManualCategory; items: ManualItem[] }> = [
+      { category: 'book', items: books },
+      { category: 'movie', items: movies },
+      { category: 'game', items: games },
+      { category: 'purchase', items: purchases },
+    ];
+
+    manualCollections.forEach(({ category, items }) => {
+      items.forEach((item) => {
+        const completedAt = typeof item.completedAt === 'number' ? item.completedAt : item.createdAt ?? null;
+        entries.push({
+          kind: 'manual',
+          key: `${category}:${item.id}`,
+          completedAt,
+          xp: manualXpAmount(category, item),
+          category,
+          item,
+        });
+      });
+    });
+
+    return entries.sort((a, b) => {
+      const at = a.completedAt ?? 0;
+      const bt = b.completedAt ?? 0;
+      return bt - at;
+    });
+  }, [books, movies, games, purchases, doneTasks, manualXpAmount]);
+
+  const groups: CompletedGroup[] = useMemo(() => {
+    const map = new Map<string, CompletedEntry[]>();
+    combinedEntries.forEach((entry) => {
+      const key = entry.completedAt ? new Date(entry.completedAt).toISOString().slice(0, 10) : '__NO_DATE__';
+      const arr = map.get(key) ?? [];
+      arr.push(entry);
+      map.set(key, arr);
+    });
+    const keys = Array.from(map.keys());
+    keys.sort((a, b) => {
+      if (a === '__NO_DATE__') return 1;
+      if (b === '__NO_DATE__') return -1;
+      return new Date(b + 'T00:00:00Z').getTime() - new Date(a + 'T00:00:00Z').getTime();
+    });
+    return keys.map((key) => {
+      const entries = (map.get(key) ?? []).slice().sort((a, b) => {
+        const at = a.completedAt ?? 0;
+        const bt = b.completedAt ?? 0;
+        return bt - at;
+      });
+      const isNoDate = key === '__NO_DATE__';
+      const label = isNoDate
+        ? 'Без даты'
+        : new Date(key + 'T00:00:00Z').toLocaleDateString('ru-RU', {
+            weekday: 'short',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          });
+      const xp = isNoDate
+        ? entries.reduce((sum, entry) => sum + (entry.xp ?? 0), 0)
+        : xpByDay.get(key) ?? 0;
+      return { key, label, xp, entries };
+    });
+  }, [combinedEntries, xpByDay]);
+
+  async function handleDeleteManual(category: ManualCategory, id: string) {
+    const confirmMsg = 'Удалить элемент навсегда?';
+    if (!window.confirm(confirmMsg)) return;
+    if (category === 'book') {
+      await db.books.delete(id);
+      setBooks((arr) => arr.filter((item) => item.id !== id));
+    } else if (category === 'movie') {
+      await db.movies.delete(id);
+      setMovies((arr) => arr.filter((item) => item.id !== id));
+    } else if (category === 'game') {
+      await db.games.delete(id);
+      setGames((arr) => arr.filter((item) => item.id !== id));
+    } else {
+      await db.purchases.delete(id);
+      setPurchases((arr) => arr.filter((item) => item.id !== id));
+    }
+  }
 
   return (
     <div className="active-page">
       <div className="active-page__header">
         <Link to="/" className="tool-link" title="Назад к доске" aria-label="Назад к доске">← Назад к доске</Link>
-        <h2>Выполненные задачи</h2>
+        <h2>Выполненное</h2>
       </div>
-      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-        {grouped.map((g) => (
-          <React.Fragment key={g.key}>
-            <div style={{ gridColumn: '1 / -1', borderTop: '1px solid #ccc', margin: '12px 0 8px', position: 'relative' }}>
-              <span style={{ position: 'absolute', top: -10, left: 0, background: '#fff', padding: '0 6px', fontSize: 12, color: '#666' }}>{g.label}</span>
+      <div
+        className="active-list"
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}
+      >
+        {groups.map((group) => (
+          <React.Fragment key={group.key}>
+            <div
+              style={{
+                gridColumn: '1 / -1',
+                borderTop: '1px solid #ccc',
+                margin: '16px 0 8px',
+                position: 'relative',
+                paddingTop: 6,
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  top: -12,
+                  left: 0,
+                  background: '#fff',
+                  padding: '0 8px',
+                  fontSize: 12,
+                  color: '#555',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <span>{group.label}</span>
+                <span className="badge" style={{ background: group.xp >= 0 ? '#e6f4ea' : '#fdebea', color: group.xp >= 0 ? '#246b35' : '#a13737' }}>
+                  {xpBadgeValue(group.xp)}
+                </span>
+              </span>
             </div>
-            {g.tasks.map((t) => {
-              const xpAmount = taskXpAmount(t.id);
-              const tooltip = xpLabel(xpAmount);
+            {group.entries.map((entry) => {
+              const completedAt = entry.completedAt;
+              const timeLabel = typeof completedAt === 'number'
+                ? new Date(completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                : null;
+              if (entry.kind === 'task') {
+                const task = entry.node;
+                return (
+                  <div
+                    key={entry.key}
+                    className="active-item"
+                    data-item-type="task"
+                    data-xp-amount={typeof entry.xp === 'number' ? entry.xp : 'none'}
+                    title={task.description || task.title}
+                    aria-label={task.title}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span className="badge">Задача</span>
+                      <span className="badge" style={{ background: entry.xp && entry.xp < 0 ? '#fdebea' : '#e6f4ea', color: entry.xp && entry.xp < 0 ? '#a13737' : '#246b35' }}>
+                        {xpBadgeValue(entry.xp)}
+                      </span>
+                    </div>
+                    <div className="active-item__title">{task.title}</div>
+                    {task.description ? <div className="active-item__desc">{task.description}</div> : null}
+                    {Array.isArray(task.subtasks) && task.subtasks.length > 0 ? (
+                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {task.subtasks.map((s) => (
+                          <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+                            <input type="checkbox" checked={!!s.done} readOnly />
+                            <span style={{ textDecoration: s.done ? 'line-through' : undefined }}>{s.title}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="active-item__meta" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                      {timeLabel ? <span className="badge">⏱ {timeLabel}</span> : null}
+                      <button
+                        className="tool-btn"
+                        title="Открыть на доске"
+                        aria-label="Открыть на доске"
+                        onClick={() => { revealNode(task.id); navigate('/'); }}
+                      >
+                        🔍
+                      </button>
+                      <button
+                        className="tool-btn"
+                        title="Удалить"
+                        aria-label="Удалить"
+                        onClick={async () => {
+                          if (window.confirm('Удалить задачу навсегда?')) {
+                            await removeNode(task.id);
+                          }
+                        }}
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+
+              const { item, category, xp } = entry;
+              const labelMap: Record<ManualCategory, string> = {
+                book: 'Книга',
+                movie: 'Фильм',
+                game: 'Игра',
+                purchase: 'Покупка',
+              };
               return (
                 <div
-                  key={t.id}
+                  key={entry.key}
                   className="active-item"
-                  title={tooltip}
-                  aria-label={tooltip}
-                  data-xp-amount={typeof xpAmount === 'number' ? xpAmount : 'none'}
+                  data-item-type={category}
+                  data-xp-amount={typeof xp === 'number' ? xp : 'none'}
+                  title={item.comment || item.title}
+                  aria-label={item.title}
                 >
-                  <div className="active-item__title">{t.title}</div>
-                  {t.description ? <div className="active-item__desc">{t.description}</div> : null}
-                  {Array.isArray(t.subtasks) && t.subtasks.length > 0 ? (
-                    <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {t.subtasks.map((s) => (
-                        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
-                          <input type="checkbox" checked={!!s.done} readOnly />
-                          <span style={{ textDecoration: s.done ? 'line-through' : undefined }}>{s.title}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  <div className="active-item__meta">
-                    {typeof t.completedAt === 'number' ? (
-                      <span className="badge">⏱ {new Date(t.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
-                    ) : null}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span className="badge">{labelMap[category]}</span>
+                    <span className="badge" style={{ background: xp && xp < 0 ? '#fdebea' : '#e6f4ea', color: xp && xp < 0 ? '#a13737' : '#246b35' }}>
+                      {xpBadgeValue(xp)}
+                    </span>
+                  </div>
+                  <SmartImage
+                    urls={buildFallbackList(category, item.title, item.coverUrl)}
+                    alt={item.title}
+                    style={{ width: '100%', height: 212, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
+                  />
+                  <div className="active-item__title">{item.title}</div>
+                  {item.comment ? <div className="active-item__desc">{item.comment}</div> : null}
+                  <div className="active-item__meta" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                    {timeLabel ? <span className="badge">⏱ {timeLabel}</span> : null}
                     <button
                       className="tool-btn"
-                      style={{ marginLeft: 8 }}
-                      title="Открыть на доске"
-                      aria-label="Открыть на доске"
-                      onClick={() => { revealNode(t.id); navigate('/'); }}
-                    >
-                      🔍
-                    </button>
-                    <button
-                      className="tool-btn"
-                      style={{ marginLeft: 8 }}
                       title="Удалить"
                       aria-label="Удалить"
-                      onClick={async () => {
-                        if (window.confirm('Удалить задачу навсегда?')) {
-                          await removeNode(t.id);
-                        }
-                      }}
+                      onClick={() => { void handleDeleteManual(category, item.id); }}
                     >
                       🗑️
                     </button>
@@ -159,171 +358,7 @@ export const CompletedTasksPage: React.FC = () => {
             })}
           </React.Fragment>
         ))}
-        {doneTasks.length === 0 ? <div className="empty">Нет выполненных задач</div> : null}
-      </div>
-
-      <div className="active-page__header" style={{ marginTop: 24 }}>
-        <h2>Выполненные книги</h2>
-      </div>
-      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-        {books.map((b) => {
-          const xpAmount = manualXpAmount('book', b.id, b.completedAt);
-          const tooltip = xpLabel(xpAmount);
-          return (
-            <div
-              key={b.id}
-              className="active-item"
-              title={tooltip}
-              aria-label={tooltip}
-              data-xp-amount={typeof xpAmount === 'number' ? xpAmount : 'none'}
-            >
-              <SmartImage urls={buildFallbackList('book', b.title, b.coverUrl)} alt={b.title} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 6 }} />
-              <div className="active-item__title" style={{ marginTop: 6 }}>{b.title}</div>
-              {b.comment ? <div className="active-item__desc">{b.comment}</div> : null}
-              <div className="active-item__meta">
-                {typeof b.completedAt === 'number' ? <span className="badge">⏱ {new Date(b.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span> : null}
-                <button
-                  className="tool-btn"
-                  style={{ marginLeft: 8 }}
-                  title="Удалить"
-                  aria-label="Удалить"
-                  onClick={async () => {
-                    if (window.confirm('Удалить навсегда?')) {
-                      await db.books.delete(b.id);
-                      setBooks((arr) => arr.filter((x) => x.id !== b.id));
-                    }
-                  }}
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-          );
-        })}
-        {books.length === 0 ? <div className="empty">Нет выполненных книг</div> : null}
-      </div>
-
-      <div className="active-page__header" style={{ marginTop: 24 }}>
-        <h2>Выполненные фильмы</h2>
-      </div>
-      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-        {movies.map((m) => {
-          const xpAmount = manualXpAmount('movie', m.id, m.completedAt);
-          const tooltip = xpLabel(xpAmount);
-          return (
-            <div
-              key={m.id}
-              className="active-item"
-              title={tooltip}
-              aria-label={tooltip}
-              data-xp-amount={typeof xpAmount === 'number' ? xpAmount : 'none'}
-            >
-              <SmartImage urls={buildFallbackList('movie', m.title, m.coverUrl)} alt={m.title} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 6 }} />
-              <div className="active-item__title" style={{ marginTop: 6 }}>{m.title}</div>
-              {m.comment ? <div className="active-item__desc">{m.comment}</div> : null}
-              <div className="active-item__meta">
-                {typeof m.completedAt === 'number' ? <span className="badge">⏱ {new Date(m.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span> : null}
-                <button
-                  className="tool-btn"
-                  style={{ marginLeft: 8 }}
-                  title="Удалить"
-                  aria-label="Удалить"
-                  onClick={async () => {
-                    if (window.confirm('Удалить навсегда?')) {
-                      await db.movies.delete(m.id);
-                      setMovies((arr) => arr.filter((x) => x.id !== m.id));
-                    }
-                  }}
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-          );
-        })}
-        {movies.length === 0 ? <div className="empty">Нет выполненных фильмов</div> : null}
-      </div>
-
-      <div className="active-page__header" style={{ marginTop: 24 }}>
-        <h2>Выполненные игры</h2>
-      </div>
-      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-        {games.map((g) => {
-          const xpAmount = manualXpAmount('game', g.id, g.completedAt);
-          const tooltip = xpLabel(xpAmount);
-          return (
-            <div
-              key={g.id}
-              className="active-item"
-              title={tooltip}
-              aria-label={tooltip}
-              data-xp-amount={typeof xpAmount === 'number' ? xpAmount : 'none'}
-            >
-              <SmartImage urls={buildFallbackList('game', g.title, g.coverUrl)} alt={g.title} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 6 }} />
-              <div className="active-item__title" style={{ marginTop: 6 }}>{g.title}</div>
-              {g.comment ? <div className="active-item__desc">{g.comment}</div> : null}
-              <div className="active-item__meta">
-                {typeof g.completedAt === 'number' ? <span className="badge">⏱ {new Date(g.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span> : null}
-                <button
-                  className="tool-btn"
-                  style={{ marginLeft: 8 }}
-                  title="Удалить"
-                  aria-label="Удалить"
-                  onClick={async () => {
-                    if (window.confirm('Удалить навсегда?')) {
-                      await db.games.delete(g.id);
-                      setGames((arr) => arr.filter((x) => x.id !== g.id));
-                    }
-                  }}
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-          );
-        })}
-        {games.length === 0 ? <div className="empty">Нет выполненных игр</div> : null}
-      </div>
-
-      <div className="active-page__header" style={{ marginTop: 24 }}>
-        <h2>Выполненные покупки</h2>
-      </div>
-      <div className="active-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-        {purchases.map((p) => {
-          const xpAmount = manualXpAmount('purchase', p.id, p.completedAt);
-          const tooltip = xpLabel(xpAmount);
-          return (
-            <div
-              key={p.id}
-              className="active-item"
-              title={tooltip}
-              aria-label={tooltip}
-              data-xp-amount={typeof xpAmount === 'number' ? xpAmount : 'none'}
-            >
-              <SmartImage urls={buildFallbackList('purchase', p.title, p.coverUrl)} alt={p.title} style={{ width: '100%', height: 200, objectFit: 'cover', borderRadius: 6 }} />
-              <div className="active-item__title" style={{ marginTop: 6 }}>{p.title}</div>
-              {p.comment ? <div className="active-item__desc">{p.comment}</div> : null}
-              <div className="active-item__meta">
-                {typeof p.completedAt === 'number' ? <span className="badge">⏱ {new Date(p.completedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span> : null}
-                <button
-                  className="tool-btn"
-                  style={{ marginLeft: 8 }}
-                  title="Удалить"
-                  aria-label="Удалить"
-                  onClick={async () => {
-                    if (window.confirm('Удалить навсегда?')) {
-                      await db.purchases.delete(p.id);
-                      setPurchases((arr) => arr.filter((x) => x.id !== p.id));
-                    }
-                  }}
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-          );
-        })}
-        {purchases.length === 0 ? <div className="empty">Нет выполненных покупок</div> : null}
+        {combinedEntries.length === 0 ? <div className="empty" style={{ gridColumn: '1 / -1' }}>Нет выполненных элементов</div> : null}
       </div>
     </div>
   );

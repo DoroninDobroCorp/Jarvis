@@ -4,7 +4,7 @@ import {
   useGamificationStore,
   progressWithinLevel,
 } from '../gamification';
-import { getSnapshot, ymd } from '../wellbeing';
+import { computeWellbeingBonuses, ymd } from '../wellbeing';
 import { extractAssistantText } from '../assistant/api';
 import { callAssistantApi } from '../assistant/apiClient';
 import type { Achievement } from '../gamification';
@@ -75,21 +75,20 @@ async function generateBadgeImage(title: string, description: string): Promise<s
     const meta = parseBadgeMeta(text);
     const [bgFallback, accentFallback] = randomPalette(Math.abs(title.length + description.length));
     return createBadgeSvg(title, meta.emoji || '🏆', meta.bg || bgFallback, meta.accent || accentFallback);
-  } catch (e) {
+  } catch {
     const [bgFallback, accentFallback] = randomPalette(Math.abs(title.length + description.length));
     return createBadgeSvg(title, '🏅', bgFallback, accentFallback);
   }
 }
 
-function computeBonusXp(): { amount: number; label: string } | null {
+function computeBonusXp(todayKey: string): { amount: number; label: string; avg: { awareness: number; efficiency: number; joy: number; count: number } } | null {
   try {
-    const snapshot = getSnapshot();
-    const today = snapshot.today.avg;
-    if (!today) return null;
-    if (today.awareness < 7 || today.efficiency < 7 || today.joy < 7) return null;
-    const amount = Math.round((today.awareness + today.efficiency + today.joy) * 15);
-    const label = `Средние: осознанность ${today.awareness}, эффективность ${today.efficiency}, удовольствие ${today.joy}`;
-    return { amount, label };
+    const bonuses = computeWellbeingBonuses();
+    const entry = bonuses[todayKey];
+    if (!entry) return null;
+    const avg = entry.avg;
+    const label = `Средние (n=${avg.count}): осознанность ${avg.awareness}, эффективность ${avg.efficiency}, удовольствие ${avg.joy}`;
+    return { amount: entry.xp, label, avg };
   } catch {
     return null;
   }
@@ -115,8 +114,8 @@ const AchievementsPage: React.FC = () => {
 
   const currentTitle = levelTitles[level]?.title || `Уровень ${level}`;
   const progress = useMemo(() => progressWithinLevel(xp, level), [xp, level]);
-  const bonus = computeBonusXp();
   const todayKey = useMemo(() => ymd(), []);
+  const bonus = computeBonusXp(todayKey);
   const bonusClaimed = claimedBonuses[todayKey];
 
   async function handleGeneratePreview() {
@@ -181,7 +180,12 @@ const AchievementsPage: React.FC = () => {
   function claimBonus() {
     if (!bonus) return;
     if (bonusClaimed) return;
-    markBonusClaimed(todayKey, bonus.amount);
+    markBonusClaimed(todayKey, bonus.amount, {
+      awareness: bonus.avg.awareness,
+      efficiency: bonus.avg.efficiency,
+      joy: bonus.avg.joy,
+      count: bonus.avg.count,
+    });
   }
 
   const progressPercent = Math.min(100, Math.round((progress.current / progress.required) * 100));
@@ -286,4 +290,3 @@ const AchievementsPage: React.FC = () => {
 };
 
 export default AchievementsPage;
-

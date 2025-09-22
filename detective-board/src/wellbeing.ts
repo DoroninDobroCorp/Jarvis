@@ -71,7 +71,17 @@ export function setMonthlyMap(map: Record<string, DayAverages>): void {
 
 export function recordEntry(entry: Omit<RatingTriple, 'ts'> & { ts?: number }, date?: string): void {
   const ts = entry.ts ?? Date.now();
-  const dk = date ?? ymd(new Date(ts));
+  const originalDate = new Date(ts);
+  let effectiveDate = originalDate;
+  if (!date) {
+    // Ответы, зафиксированные сразу после полуночи, относим к предыдущему дню.
+    const hours = originalDate.getHours();
+    const minutes = originalDate.getMinutes();
+    if (hours === 0 && minutes < 15) {
+      effectiveDate = new Date(ts - 60 * 60 * 1000);
+    }
+  }
+  const dk = date ?? ymd(effectiveDate);
   const map = getRawMap();
   const list = map[dk] ?? [];
   list.push({ awareness: entry.awareness, efficiency: entry.efficiency, joy: entry.joy, ts });
@@ -141,7 +151,39 @@ export function getSnapshot(): Snapshot {
   };
 }
 
-export function lastScheduledSlotsForDay(_date: Date): string[] {
+export function wellbeingBonusFromAverage(avg: DayAverages | undefined): number {
+  if (!avg) return 0;
+  const score = avg.awareness + avg.efficiency + avg.joy;
+  const centered = score - 18; // 6/10 по каждой шкале = нулевая точка
+  const weight = Math.min(1, avg.count / 3);
+  const adjusted = centered * 12 * weight;
+  if (!Number.isFinite(adjusted)) return 0;
+  return Math.round(adjusted);
+}
+
+export function computeWellbeingBonuses(): Record<string, { xp: number; avg: DayAverages }> {
+  const bonuses: Record<string, { xp: number; avg: DayAverages }> = {};
+  const daily = getDailyMap();
+  const raw = getRawMap();
+
+  for (const [dateKey, avg] of Object.entries(daily)) {
+    const xp = wellbeingBonusFromAverage(avg);
+    bonuses[dateKey] = { xp, avg };
+  }
+
+  for (const [dateKey, list] of Object.entries(raw)) {
+    if (!Array.isArray(list) || list.length === 0) continue;
+    const avg = computeAvg(list);
+    if (!avg) continue;
+    const xp = wellbeingBonusFromAverage(avg);
+    bonuses[dateKey] = { xp, avg };
+  }
+
+  return bonuses;
+}
+
+export function lastScheduledSlotsForDay(date: Date): string[] {
+  void date;
   // returns list of ISO times (HH:mm) we consider scheduled
   return ['09:00', '12:00', '15:00', '18:00', '21:00', '00:00'];
 }

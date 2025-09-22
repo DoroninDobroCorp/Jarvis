@@ -11,7 +11,7 @@ import { MoviesPage } from './pages/MoviesPage';
 import { GamesPage } from './pages/GamesPage';
 import { getLogger } from './logger';
 import { DiagPage } from './pages/DiagPage';
-import { CompletedTasksPage } from './pages/CompletedTasksPage';
+import CompletedTasksPage from './pages/CompletedTasksPage';
 import { PurchasesPage } from './pages/PurchasesPage';
 import AchievementsPage from './pages/AchievementsPage';
 import WellbeingManager from './components/WellbeingManager';

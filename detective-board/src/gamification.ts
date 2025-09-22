@@ -52,9 +52,17 @@ export interface Achievement {
   updatedAt?: number;
 }
 
+export interface WellbeingBonusMeta {
+  awareness: number;
+  efficiency: number;
+  joy: number;
+  count: number;
+}
+
 export interface ClaimedBonusInfo {
   xp: number;
   ts: number;
+  meta?: WellbeingBonusMeta;
 }
 
 export interface GamificationState {
@@ -76,7 +84,7 @@ export interface GamificationState {
   addAchievement: (input: { title: string; description: string; xpReward: number; imageUrl?: string }) => Achievement;
   updateAchievement: (achievement: Achievement) => void;
   removeAchievement: (id: string) => void;
-  markBonusClaimed: (dateKey: string, xp: number) => void;
+  markBonusClaimed: (dateKey: string, xp: number, meta?: WellbeingBonusMeta) => void;
   enqueueManualCompletion: (candidate: ManualCompletionCandidate) => void;
   removeManualCompletion: (id: string) => void;
 }
@@ -126,9 +134,9 @@ export function progressWithinLevel(totalXp: number, level: number): { current: 
   return { current: Math.max(0, totalXp - base), required: Math.max(1, next - base) };
 }
 
-function clampXp(value: number): number {
+function normalizeXp(value: number): number {
   if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.round(value));
+  return Math.round(value);
 }
 
 const MAX_HISTORY = 200;
@@ -148,7 +156,8 @@ export const useGamificationStore = create<GamificationState>()(
       pendingLevelUps: [],
       pendingManualCandidates: [],
       registerTaskCompletion: (info, amount, difficulty, note, completedAt) => {
-        const xp = clampXp(amount);
+        const raw = normalizeXp(amount);
+        const xp = Math.max(0, raw);
         const summary: TaskCompletionSummary = {
           ...info,
           completedAt: completedAt ?? Date.now(),
@@ -170,29 +179,37 @@ export const useGamificationStore = create<GamificationState>()(
         }));
       },
       addXp: ({ amount, source, note, taskId, achievementId, ts }) => {
-        const xpToAdd = clampXp(amount);
-        if (xpToAdd <= 0) return;
+        const xpDeltaRaw = normalizeXp(amount);
+        if (xpDeltaRaw === 0) return;
         set((state) => {
-          const nextXp = state.xp + xpToAdd;
+          const applied = xpDeltaRaw < 0 ? Math.max(xpDeltaRaw, -state.xp) : xpDeltaRaw;
+          if (applied === 0) return {};
+          const nextXp = state.xp + applied;
           const history: XPEntry[] = [...state.xpHistory, {
             id: uuidv4(),
-            amount: xpToAdd,
+            amount: applied,
             source,
             note,
             taskId,
             achievementId,
             ts: ts ?? Date.now(),
           }].slice(-MAX_HISTORY);
-          let nextLevel = state.level;
-          const pending = [...state.pendingLevelUps];
+          const prevLevel = state.level;
           const titles = { ...state.levelTitles };
-          while (nextXp >= totalXpForLevel(nextLevel + 1)) {
-            nextLevel += 1;
+          const nextLevel = levelForXp(nextXp);
+          let pending = state.pendingLevelUps.filter((evt) => evt.level <= nextLevel);
+          if (nextLevel > prevLevel) {
             const completions = state.completions.slice(-8);
-            pending.push({ level: nextLevel, totalXp: nextXp, completions, triggeredAt: Date.now() });
-            if (!titles[nextLevel]) {
-              titles[nextLevel] = { title: `Уровень ${nextLevel}`, assignedAt: Date.now() };
+            for (let lvl = prevLevel + 1; lvl <= nextLevel; lvl++) {
+              pending = [...pending, { level: lvl, totalXp: nextXp, completions, triggeredAt: Date.now() }];
+              if (!titles[lvl]) {
+                titles[lvl] = { title: `Уровень ${lvl}`, assignedAt: Date.now() };
+              }
             }
+          }
+          if (nextLevel < prevLevel) {
+            // Убираем уровни, которые больше нового.
+            pending = pending.filter((evt) => evt.level <= nextLevel);
           }
           return {
             xp: nextXp,
@@ -219,12 +236,12 @@ export const useGamificationStore = create<GamificationState>()(
           id: uuidv4(),
           title,
           description,
-          xpReward: clampXp(xpReward),
+          xpReward: Math.max(0, normalizeXp(xpReward)),
           imageUrl,
           createdAt: Date.now(),
         };
         set((state) => ({ achievements: [...state.achievements, achievement] }));
-        if (achievement.xpReward > 0) {
+        if (achievement.xpReward !== 0) {
           get().addXp({ amount: achievement.xpReward, source: 'achievement', note: title, achievementId: achievement.id });
         }
         return achievement;
@@ -237,14 +254,74 @@ export const useGamificationStore = create<GamificationState>()(
       removeAchievement: (id) => {
         set((state) => ({ achievements: state.achievements.filter((a) => a.id !== id) }));
       },
-      markBonusClaimed: (dateKey, xp) => {
-        const bonusXp = clampXp(xp);
-        set((state) => ({
-          claimedBonuses: { ...state.claimedBonuses, [dateKey]: { xp: bonusXp, ts: Date.now() } },
-        }));
-        if (bonusXp > 0) {
-          get().addXp({ amount: bonusXp, source: 'bonus', note: `Бонус за ${dateKey}` });
-        }
+      markBonusClaimed: (dateKey, xp, meta) => {
+        const target = normalizeXp(xp);
+        set((state) => {
+          const prevInfo = state.claimedBonuses[dateKey];
+          const prevXp = prevInfo?.xp ?? 0;
+          const deltaRaw = target - prevXp;
+          if (deltaRaw === 0) {
+            if (!meta || (prevInfo && prevInfo.meta)) return {};
+            return {
+              claimedBonuses: {
+                ...state.claimedBonuses,
+                [dateKey]: { xp: prevXp, ts: Date.now(), meta },
+              },
+            };
+          }
+          const applied = deltaRaw < 0 ? Math.max(deltaRaw, -state.xp) : deltaRaw;
+          if (applied === 0) {
+            return {
+              claimedBonuses: {
+                ...state.claimedBonuses,
+                [dateKey]: {
+                  xp: prevXp,
+                  ts: Date.now(),
+                  meta,
+                },
+              },
+            };
+          }
+          const nextXp = state.xp + applied;
+          const nextLevel = levelForXp(nextXp);
+          let pending = state.pendingLevelUps.filter((evt) => evt.level <= nextLevel);
+          const titles = { ...state.levelTitles };
+          if (nextLevel > state.level) {
+            const completions = state.completions.slice(-8);
+            for (let lvl = state.level + 1; lvl <= nextLevel; lvl++) {
+              pending = [...pending, { level: lvl, totalXp: nextXp, completions, triggeredAt: Date.now() }];
+              if (!titles[lvl]) {
+                titles[lvl] = { title: `Уровень ${lvl}`, assignedAt: Date.now() };
+              }
+            }
+          }
+          const appliedNote = meta
+            ? `Самочувствие ${dateKey}: осозн. ${meta.awareness}, эфф. ${meta.efficiency}, радость ${meta.joy}`
+            : `Бонус за ${dateKey}`;
+          const entryTs = Date.parse(`${dateKey}T12:00:00Z`);
+          const history: XPEntry[] = [...state.xpHistory, {
+            id: uuidv4(),
+            amount: applied,
+            source: 'bonus' as XpSource,
+            note: appliedNote,
+            ts: Number.isFinite(entryTs) ? entryTs : Date.now(),
+          }].slice(-MAX_HISTORY);
+          return {
+            xp: nextXp,
+            level: nextLevel,
+            xpHistory: history,
+            pendingLevelUps: pending,
+            levelTitles: titles,
+            claimedBonuses: {
+              ...state.claimedBonuses,
+              [dateKey]: {
+                xp: prevXp + applied,
+                ts: Date.now(),
+                meta,
+              },
+            },
+          };
+        });
       },
       enqueueManualCompletion: (candidate) => {
         set((state) => {
