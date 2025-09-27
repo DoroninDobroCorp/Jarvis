@@ -222,12 +222,25 @@ export const ActiveTasksPage: React.FC = () => {
                       title="Отметить выполненной"
                       style={{ padding: '4px 8px' }}
                       onClick={async () => {
-                        const nowTs = Date.now();
+                        const ask = window.prompt('Дата выполнения (YYYY-MM-DD или YYYY-MM-DD HH:mm). Пусто — сейчас:');
+                        let completedTs = Date.now();
+                        if (ask && ask.trim()) {
+                          const s = ask.trim();
+                          const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                          const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+                          if (m1) {
+                            const [_, yy, mm, dd] = m1;
+                            completedTs = new Date(Number(yy), Number(mm) - 1, Number(dd), 12, 0, 0).getTime();
+                          } else if (m2) {
+                            const [_, yy, mm, dd, HH, MM] = m2;
+                            completedTs = new Date(Number(yy), Number(mm) - 1, Number(dd), Number(HH), Number(MM), 0).getTime();
+                          }
+                        }
                         if (t.recurrence && (t.recurrence as Recurrence).kind !== 'none') {
                           const base = t.dueDate ? new Date(t.dueDate) : new Date();
                           base.setDate(base.getDate() + 1);
                           const nextDue = computeNextDueDate(t.recurrence as Recurrence, base);
-                          await updateNode(t.id, { status: 'done', completedAt: nowTs });
+                          await updateNode(t.id, { status: 'done', completedAt: completedTs });
                           await addTask({
                             title: t.title,
                             description: t.description,
@@ -247,7 +260,7 @@ export const ActiveTasksPage: React.FC = () => {
                               : undefined,
                           });
                         } else {
-                          await updateNode(t.id, { status: 'done', completedAt: nowTs });
+                          await updateNode(t.id, { status: 'done', completedAt: completedTs });
                         }
                       }}
                     >

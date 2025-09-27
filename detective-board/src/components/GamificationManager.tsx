@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../store';
 import { buildNodeMap, summarizeTask, type TaskPathInfo, isTaskNode } from '../taskUtils';
+import type { TaskNode } from '../types';
 import {
   useGamificationStore,
   type Difficulty,
@@ -8,6 +9,7 @@ import {
 } from '../gamification';
 import { extractAssistantText } from '../assistant/api';
 import { callAssistantApi } from '../assistant/apiClient';
+import { db } from '../db';
 
 interface QueueItem {
   task: TaskPathInfo;
@@ -111,6 +113,7 @@ const panelStyle: React.CSSProperties = {
 
 const GamificationManager: React.FC = () => {
   const nodes = useAppStore((s) => s.nodes);
+  const updateNode = useAppStore((s) => s.updateNode);
   const processedTasks = useGamificationStore((s) => s.processedTasks);
   const registerTaskCompletion = useGamificationStore((s) => s.registerTaskCompletion);
   const ignoreTaskCompletion = useGamificationStore((s) => s.ignoreTaskCompletion);
@@ -129,6 +132,9 @@ const GamificationManager: React.FC = () => {
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
   const [titleLoading, setTitleLoading] = useState(false);
   const [titleValue, setTitleValue] = useState('');
+  const [completionDate, setCompletionDate] = useState('');
+  const [completionTime, setCompletionTime] = useState('');
+  const [dateError, setDateError] = useState<string | null>(null);
 
   useEffect(() => {
     const map = buildNodeMap(nodes);
@@ -213,12 +219,51 @@ const GamificationManager: React.FC = () => {
 
   const currentItem = queue.length ? queue[0] : null;
 
+  const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+  const toLocalDateInput = (ts: number) => {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  };
+  const toLocalTimeInput = (ts: number) => {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return '';
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  };
+  const parseDateTimeInput = (dateStr: string, timeStr: string): number | null => {
+    if (!dateStr.trim()) return null;
+    const parts = dateStr.split('-').map((p) => Number(p));
+    if (parts.length !== 3 || parts.some((v) => Number.isNaN(v))) {
+      return NaN;
+    }
+    const [yy, mm, dd] = parts;
+    let hh = 12;
+    let min = 0;
+    if (timeStr.trim()) {
+      const tParts = timeStr.split(':').map((p) => Number(p));
+      if (tParts.length !== 2 || tParts.some((v) => Number.isNaN(v))) {
+        return NaN;
+      }
+      [hh, min] = tParts;
+    }
+    const dt = new Date(yy, mm - 1, dd, hh, min, 0, 0);
+    const stamp = dt.getTime();
+    if (Number.isNaN(stamp)) {
+      return NaN;
+    }
+    return stamp;
+  };
+
   useEffect(() => {
     if (!currentItem) return;
     setXpValue(300);
     setDifficulty('medium');
     setNote('');
-  }, [currentItem?.task.id]);
+    const baseTs = Number.isFinite(currentItem.completedAt) ? currentItem.completedAt : Date.now();
+    setCompletionDate(toLocalDateInput(baseTs));
+    setCompletionTime(toLocalTimeInput(baseTs));
+    setDateError(null);
+  }, [currentItem]);
 
   const keyForItem = (item: QueueItem) => (
     item.source === 'manual' ? `manual:${item.manualId}` : `task:${item.task.id}`
@@ -234,10 +279,62 @@ const GamificationManager: React.FC = () => {
     setQueue((prev) => prev.filter((entry) => keyForItem(entry) !== targetKey));
   }
 
-  function submitXp() {
+  async function cancelCompletion(item: QueueItem) {
+    if (item.source === 'task') {
+      await updateNode(item.task.id, { status: 'in_progress', completedAt: undefined });
+    } else if (item.source === 'manual' && item.manualId) {
+      const [category, entityId] = item.manualId.split(':');
+      if (category && entityId) {
+        if (category === 'book') {
+          await db.books.update(entityId, { status: 'active', completedAt: undefined });
+        } else if (category === 'movie') {
+          await db.movies.update(entityId, { status: 'active', completedAt: undefined });
+        } else if (category === 'game') {
+          await db.games.update(entityId, { status: 'active', completedAt: undefined });
+        } else if (category === 'purchase') {
+          await db.purchases.update(entityId, { status: 'active', completedAt: undefined });
+        }
+      }
+      if (item.manualId) {
+        removeManualCompletion(item.manualId);
+      }
+    }
+    const targetKey = keyForItem(item);
+    setQueue((prev) => prev.filter((entry) => keyForItem(entry) !== targetKey));
+  }
+
+  async function submitXp() {
     if (!currentItem) return;
     const amount = clampXp(xpValue);
-    registerTaskCompletion(currentItem.task, amount, difficulty, note.trim() || undefined, currentItem.completedAt);
+    const parsedTs = parseDateTimeInput(completionDate, completionTime);
+    if (Number.isNaN(parsedTs)) {
+      setDateError('Проверь формат даты и времени. Требуется YYYY-MM-DD и опционально HH:MM.');
+      return;
+    }
+    const effectiveTs = parsedTs ?? currentItem.completedAt ?? Date.now();
+    setDateError(null);
+
+    if (currentItem.source === 'task') {
+      const node = nodes.find((n): n is TaskNode => n.id === currentItem.task.id && isTaskNode(n));
+      if (node && node.completedAt !== effectiveTs) {
+        await updateNode(currentItem.task.id, { completedAt: effectiveTs });
+      }
+    } else if (currentItem.source === 'manual' && currentItem.manualId) {
+      const [category, entityId] = currentItem.manualId.split(':');
+      if (category && entityId) {
+        if (category === 'book') {
+          await db.books.update(entityId, { completedAt: effectiveTs });
+        } else if (category === 'movie') {
+          await db.movies.update(entityId, { completedAt: effectiveTs });
+        } else if (category === 'game') {
+          await db.games.update(entityId, { completedAt: effectiveTs });
+        } else if (category === 'purchase') {
+          await db.purchases.update(entityId, { completedAt: effectiveTs });
+        }
+      }
+    }
+
+    registerTaskCompletion(currentItem.task, amount, difficulty, note.trim() || undefined, effectiveTs);
     if (currentItem.source === 'manual' && currentItem.manualId) {
       removeManualCompletion(currentItem.manualId);
     }
@@ -300,10 +397,37 @@ const GamificationManager: React.FC = () => {
               />
             </label>
             <label style={{ display: 'block', marginBottom: 10 }}>
+              Дата выполнения
+              <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                <input
+                  type="date"
+                  value={completionDate}
+                  onChange={(e) => {
+                    setCompletionDate(e.target.value);
+                    setDateError(null);
+                  }}
+                  style={{ minWidth: 150 }}
+                />
+                <input
+                  type="time"
+                  value={completionTime}
+                  onChange={(e) => {
+                    setCompletionTime(e.target.value);
+                    setDateError(null);
+                  }}
+                />
+              </div>
+            </label>
+            {dateError ? (
+              <div style={{ color: '#ff8888', fontSize: 12, marginBottom: 10 }}>{dateError}</div>
+            ) : null}
+            <label style={{ display: 'block', marginBottom: 10 }}>
               Комментарий (необязательно)
               <textarea value={note} onChange={(e) => setNote(e.target.value)} style={{ width: '100%', minHeight: 60, marginTop: 4 }} />
             </label>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
+              <button className="tool-btn" onClick={() => cancelCompletion(currentItem)}>Отменить завершение</button>
+              <span style={{ flex: 1 }} />
               <button className="tool-btn" onClick={() => markProcessed(currentItem)}>Пропустить</button>
               <button className="tool-btn" onClick={submitXp}>Начислить</button>
             </div>

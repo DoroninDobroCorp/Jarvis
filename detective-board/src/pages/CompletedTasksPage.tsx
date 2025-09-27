@@ -8,6 +8,7 @@ import SmartImage from '../components/SmartImage';
 import { buildFallbackList } from '../imageSearch';
 import { useGamificationStore } from '../gamification';
 import { ymd } from '../wellbeing';
+import { buildNodeMap } from '../taskUtils';
 
 type ManualCategory = 'book' | 'movie' | 'game' | 'purchase';
 
@@ -65,6 +66,22 @@ const CompletedTasksPage: React.FC = () => {
     return map;
   }, [completions]);
 
+  // Доп. индекс для ручных элементов (book/movie/game/purchase): по паре category+entityId
+  // Нужен на случай, если пользователь изменил время выполнения после начисления XP,
+  // из‑за чего completionId (включает timestamp) перестал совпадать с текущим completedAt у сущности.
+  const manualXpByEntity = useMemo(() => {
+    const map = new Map<string, number>();
+    completions.forEach((info) => {
+      const m = info.id.match(/^(book|movie|game|purchase):([^:]+):/);
+      if (m) {
+        const category = m[1] as ManualCategory;
+        const entityId = m[2];
+        map.set(`${category}:${entityId}`, info.xp);
+      }
+    });
+    return map;
+  }, [completions]);
+
   const xpByDay = useMemo(() => {
     const map = new Map<string, number>();
     xpHistory.forEach((entry) => {
@@ -75,11 +92,51 @@ const CompletedTasksPage: React.FC = () => {
     return map;
   }, [xpHistory]);
 
+  // Индекс суммарных записей по id задачи (для извлечения parentPath на момент завершения)
+  const completionsByTaskId = useMemo(() => {
+    const map = new Map<string, typeof completions>();
+    completions.forEach((c) => {
+      const arr = map.get(c.id) ?? [];
+      arr.push(c);
+      map.set(c.id, arr);
+    });
+    return map;
+  }, [completions]);
+
+  // Для фолбэка можем посчитать текущие пути групп
+  const groupPathById = useMemo(() => {
+    const pathMap = new Map<string, string>();
+    const nodesById = buildNodeMap(nodes);
+    const resolvePath = (groupId: string): string => {
+      const cached = pathMap.get(groupId);
+      if (cached) return cached;
+      const node = nodesById.get(groupId);
+      if (!node || node.type !== 'group') {
+        pathMap.set(groupId, '');
+        return '';
+      }
+      const parentNode = node.parentId ? nodesById.get(node.parentId) : undefined;
+      const parentPath = parentNode && parentNode.type === 'group' ? resolvePath(parentNode.id) : '';
+      const namePart = (node.name || '').trim() || 'Без названия';
+      const fullPath = parentPath ? `${parentPath} / ${namePart}` : namePart;
+      pathMap.set(groupId, fullPath);
+      return fullPath;
+    };
+    nodes.forEach((node) => { if (node.type === 'group') resolvePath(node.id); });
+    return pathMap;
+  }, [nodes]);
+
   const manualXpAmount = useCallback((category: ManualCategory, item: ManualItem) => {
-    if (typeof item.completedAt !== 'number') return undefined;
+    if (typeof item.completedAt !== 'number') {
+      // Нет времени выполнения — пробуем последнюю запись по сущности
+      return manualXpByEntity.get(`${category}:${item.id}`);
+    }
     const key = `${category}:${item.id}:${item.completedAt}`;
-    return completionByTaskId.get(key);
-  }, [completionByTaskId]);
+    const exact = completionByTaskId.get(key);
+    if (typeof exact === 'number') return exact;
+    // Фолбэк: искать по паре category+entityId
+    return manualXpByEntity.get(`${category}:${item.id}`);
+  }, [completionByTaskId, manualXpByEntity]);
 
   const doneTasks = useMemo(() => {
     return nodes
@@ -268,14 +325,23 @@ const CompletedTasksPage: React.FC = () => {
                 : null;
               if (entry.kind === 'task') {
                 const task = entry.node;
+                // Попробуем найти запись completion для этой задачи с совпадающим completedAt,
+                // чтобы взять parentPath (группу) на момент завершения
+                const arr = completionsByTaskId.get(task.id) || [];
+                const comp = arr.find((c) => c.completedAt === entry.completedAt) || arr[arr.length - 1];
+                const compPath = comp?.parentPath?.length ? comp.parentPath.join(' / ') : undefined;
+                // Фолбэк: текущая группа по node.parentId
+                const fallbackPath = task.parentId ? (groupPathById.get(task.parentId) || 'Без группы') : 'Без группы';
+                const parentGroupName = compPath || fallbackPath;
                 return (
                   <div
                     key={entry.key}
                     className="active-item"
+                    title={`Группа: ${parentGroupName}`}
+                    aria-label={`Группа: ${parentGroupName}`}
                     data-item-type="task"
                     data-xp-amount={typeof entry.xp === 'number' ? entry.xp : 'none'}
-                    title={task.description || task.title}
-                    aria-label={task.title}
+                    data-parent-group={parentGroupName}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <span className="badge">Задача</span>

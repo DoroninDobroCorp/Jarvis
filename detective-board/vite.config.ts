@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { defineConfig, type Plugin, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import fs from 'node:fs'
+import path from 'node:path'
 
 type TelegramRatingEntry = {
   awareness: number;
@@ -36,7 +38,34 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
 
   const apiBase = `https://api.telegram.org/bot${token}`;
   const pending: TelegramRatingEntry[] = [];
-  const chatIds = new Set<number>();
+  // Persist chat ids across dev server restarts
+  const chatIdsFile = path.join(process.cwd(), '.tg_chat_ids.json');
+  const loadChatIds = (): number[] => {
+    try {
+      if (fs.existsSync(chatIdsFile)) {
+        const raw = fs.readFileSync(chatIdsFile, 'utf8');
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.map((n) => Number(n)).filter((n) => Number.isFinite(n)) : [];
+      }
+    } catch (e) {
+      // ignore read/parse errors
+    }
+    // allow seeding via env if file is missing
+    const seeded = (process.env.TELEGRAM_CHAT_IDS || '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n));
+    return seeded;
+  };
+  const chatIds = new Set<number>(loadChatIds());
+  const persistChatIds = () => {
+    try {
+      const arr = Array.from(chatIds.values());
+      fs.writeFileSync(chatIdsFile, JSON.stringify(arr, null, 2), 'utf8');
+    } catch (e) {
+      // non-fatal
+    }
+  };
   let pollOffset = 0;
   let polling = false;
   let pollInterval: NodeJS.Timeout | null = null;
@@ -113,7 +142,9 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
     const data = typeof callback.data === 'string' ? callback.data : '';
     const chatId = callback.message?.chat?.id;
     if (typeof chatId !== 'number') return;
+    const before = chatIds.size;
     chatIds.add(chatId);
+    if (chatIds.size !== before) persistChatIds();
     if (data.startsWith('wb:')) {
       const parts = data.slice(3).split(':');
       if (parts.length === 3) {
@@ -127,7 +158,9 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
     if (!message || typeof message !== 'object') return;
     const chatId = message.chat?.id;
     if (typeof chatId !== 'number') return;
+    const before = chatIds.size;
     chatIds.add(chatId);
+    if (chatIds.size !== before) persistChatIds();
     if (typeof message.text === 'string') {
       const text: string = message.text;
       if (text.startsWith('/start')) {

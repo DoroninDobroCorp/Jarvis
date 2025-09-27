@@ -126,7 +126,6 @@ export const GamesPage: React.FC = () => {
       const info = buildCompletionInfo(g, completionId);
       enqueueManualCompletion({ id: completionId, info, completedAt });
     }
-    await load();
   };
 
   const setCoverFromFile: React.ChangeEventHandler<HTMLInputElement> = async (e) => {

@@ -1544,9 +1544,26 @@ export const BoardCanvas: React.FC = () => {
                   checked={(ctxNode as TaskNode).status === 'done'}
                   onChange={(e) => {
                     const done = e.target.checked;
-                    const patch: Partial<TaskNode> = done
-                      ? { status: 'done', completedAt: Date.now() }
-                      : { status: 'inactive', completedAt: undefined };
+                    let patch: Partial<TaskNode>;
+                    if (done) {
+                      const ask = window.prompt('Дата выполнения (YYYY-MM-DD или YYYY-MM-DD HH:mm). Пусто — сейчас:');
+                      let completedAt = Date.now();
+                      if (ask && ask.trim()) {
+                        const s = ask.trim();
+                        const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                        const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+                        if (m1) {
+                          const [_, yy, mm, dd] = m1;
+                          completedAt = new Date(Number(yy), Number(mm) - 1, Number(dd), 12, 0, 0).getTime();
+                        } else if (m2) {
+                          const [_, yy, mm, dd, HH, MM] = m2;
+                          completedAt = new Date(Number(yy), Number(mm) - 1, Number(dd), Number(HH), Number(MM), 0).getTime();
+                        }
+                      }
+                      patch = { status: 'done', completedAt };
+                    } else {
+                      patch = { status: 'inactive', completedAt: undefined };
+                    }
                     void useAppStore.getState().updateNode(ctxNode.id, patch as any);
                   }}
                 />
