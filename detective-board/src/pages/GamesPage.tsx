@@ -4,11 +4,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { GameItem } from '../types';
 import { getLogger } from '../logger';
-import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList, fetchFirstImageFromOpenverse } from '../imageSearch';
+import { buildFallbackList } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
 import { useGamificationStore } from '../gamification';
 import type { TaskPathInfo } from '../taskUtils';
+import { resolveGameCover } from '../coverBackfill';
 
 export const GamesPage: React.FC = () => {
   const log = getLogger('GamesPage');
@@ -47,9 +48,12 @@ export const GamesPage: React.FC = () => {
     void (async () => {
       try {
         const list = await db.games.toArray();
-        const missing = list.filter((g) => !g.coverUrl);
+        const missing = list.filter((g) => {
+          const url = typeof g.coverUrl === 'string' ? g.coverUrl.trim() : '';
+          return !url || url.startsWith('data:');
+        });
         for (const g of missing) {
-          const url = await fetchArtwork(g.title);
+          const url = await resolveGameCover(g.title);
           if (url) {
             await db.games.update(g.id, { coverUrl: url });
           }
@@ -63,47 +67,13 @@ export const GamesPage: React.FC = () => {
     })();
   }, []);
 
-  // Try to fetch an artwork for the game via iTunes (apps) as a lightweight heuristic
-  const fetchArtwork = async (t: string): Promise<string | undefined> => {
-    try {
-      const q = encodeURIComponent(t);
-      const r = await fetch(`https://itunes.apple.com/search?term=${q}&media=software&limit=1`);
-      const j = await r.json();
-      const res = j.results?.[0];
-      let art: string | undefined = res?.artworkUrl100 || res?.artworkUrl60;
-      if (typeof art === 'string') {
-        art = art.replace('http://', 'https://');
-        art = art.replace(/100x100bb\.png$/, '600x600bb.png').replace(/100x100bb\.jpg$/, '600x600bb.jpg');
-        return art;
-      }
-    } catch (e) {
-      log.warn('fetchArtwork:error', e as Error);
-    }
-    // Try Openverse as zero-config search
-    try {
-      const ov = await fetchFirstImageFromOpenverse(`${t} game cover`);
-      if (ov) return ov;
-    } catch (e) {
-      log.warn('fetchArtwork:openverse_error', e as Error);
-    }
-    // Fallback: Google Custom Search Image by text
-    try {
-      const alt = await fetchFirstImageFromGoogle(`${t} game cover OR Игра ${t}`);
-      if (alt) return alt;
-    } catch (e) {
-      log.warn('fetchArtwork:google_fallback_error', e as Error);
-    }
-    // Final fallback: Unsplash Source (no key required)
-    return fallbackImageFromUnsplash(t);
-  };
-
   const addItem = async () => {
     const t = title.trim();
     if (!t) return;
     setLoading(true);
     try {
       const id = uuidv4();
-      const coverUrl = await fetchArtwork(t);
+      const coverUrl = await resolveGameCover(t);
       const item: GameItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now(), status: 'active' };
       await db.games.add(item);
       setTitle('');
@@ -177,7 +147,7 @@ export const GamesPage: React.FC = () => {
             <SmartImage
               urls={buildFallbackList('game', g.title, g.coverUrl)}
               alt={g.title}
-              query={!g.coverUrl ? `${g.title} game cover` : undefined}
+              query={(!g.coverUrl || (g.coverUrl || '').startsWith('data:')) ? `${g.title} game cover` : undefined}
               style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
               onResolved={(url) => {
                 if (url && !url.startsWith('data:') && url !== g.coverUrl) {

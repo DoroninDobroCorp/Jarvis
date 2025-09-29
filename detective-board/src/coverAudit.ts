@@ -1,6 +1,6 @@
 import { db } from './db';
 import { getLogger } from './logger';
-import { buildFallbackList, fetchFirstImageFromGoogle, fetchFirstImageFromOpenverse } from './imageSearch';
+import { buildFallbackList, fetchFirstImageFromGoogle, fetchFirstImageFromOpenverse, fetchFirstImageFromQwant, fetchFirstImageFromWikipedia } from './imageSearch';
 import { resolveBookCover, resolveGameCover, resolveMoviePoster, resolvePurchaseImage } from './coverBackfill';
 
 const log = getLogger('coverAudit');
@@ -23,6 +23,14 @@ export async function loadImageOk(src: string, maxMs = 12000): Promise<boolean> 
 
 function unique(list: string[]): string[] { return Array.from(new Set(list.filter(Boolean))); }
 
+function shouldReprocessCover(url?: string): boolean {
+  if (!url) return true;
+  const trimmed = url.trim();
+  if (!trimmed) return true;
+  if (trimmed.startsWith('data:')) return true;
+  return false;
+}
+
 async function candidateUrls(kind: 'book'|'movie'|'game'|'purchase', title: string, existing?: string): Promise<string[]> {
   const base = buildFallbackList(kind, title, existing);
   const t = title.trim();
@@ -42,7 +50,25 @@ async function candidateUrls(kind: 'book'|'movie'|'game'|'purchase', title: stri
       : `${t} product photo`;
     const ov = await fetchFirstImageFromOpenverse(q);
     if (ov) dyn.push(ov);
-  } catch (e) { log.warn('openverse_failed', { kind, title }); }
+  } catch (e) { log.warn('openverse_failed', { kind, title, error: String(e instanceof Error ? e.message : e) }); }
+  try {
+    const wiki = kind === 'book'
+      ? await fetchFirstImageFromWikipedia(t, [`${t} (book)`, `Книга ${t}`, `${t} роман`])
+      : kind === 'movie'
+        ? await fetchFirstImageFromWikipedia(t, [`${t} (film)`, `Фильм ${t}`])
+        : kind === 'game'
+          ? await fetchFirstImageFromWikipedia(t, [`${t} (video game)`, `Игра ${t}`])
+          : await fetchFirstImageFromWikipedia(t, [`${t} (product)`, `товар ${t}`]);
+    if (wiki) dyn.push(wiki);
+  } catch (e) { log.warn('wikipedia_failed', { kind, title, error: String(e instanceof Error ? e.message : e) }); }
+  try {
+    const q = kind === 'book' ? `${t} book cover`
+      : kind === 'movie' ? `${t} movie poster`
+      : kind === 'game' ? `${t} game cover`
+      : `${t} product photo`;
+    const qw = await fetchFirstImageFromQwant(q);
+    if (qw) dyn.push(qw);
+  } catch (e) { log.warn('qwant_failed', { kind, title, error: String(e instanceof Error ? e.message : e) }); }
   try {
     const q = kind === 'book' ? `${t} book cover OR Книга ${t}`
       : kind === 'movie' ? `${t} movie poster OR Фильм ${t}`
@@ -50,7 +76,7 @@ async function candidateUrls(kind: 'book'|'movie'|'game'|'purchase', title: stri
       : `${t} product photo OR Товар ${t}`;
     const g = await fetchFirstImageFromGoogle(q);
     if (g) dyn.push(g);
-  } catch (e) { log.warn('google_failed', { kind, title }); }
+  } catch (e) { log.warn('google_failed', { kind, title, error: String(e instanceof Error ? e.message : e) }); }
   return unique([...dyn, ...base]);
 }
 
@@ -87,8 +113,8 @@ export async function auditAndFixAllCovers(limitPerKind = 500, concurrency = 4):
 
   for (const K of kinds) {
     perKind[K.kind] = { checked: 0, updated: 0 };
-    const missing = K.list.filter(x => !x.coverUrl).slice(0, limitPerKind);
-    const queue = missing.slice();
+    const pending = K.list.filter((x) => shouldReprocessCover(x.coverUrl));
+    const queue = (Number.isFinite(limitPerKind) ? pending.slice(0, limitPerKind) : pending.slice());
     const workers = Array.from({ length: Math.min(concurrency, queue.length || 1) }, () => (async () => {
       while (queue.length) {
         const item = queue.shift();

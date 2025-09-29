@@ -4,11 +4,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { BookItem } from '../types';
 import { getLogger } from '../logger';
-import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList, fetchFirstImageFromOpenverse } from '../imageSearch';
+import { buildFallbackList } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
 import { useGamificationStore } from '../gamification';
 import type { TaskPathInfo } from '../taskUtils';
+import { resolveBookCover } from '../coverBackfill';
 
 export const BooksPage: React.FC = () => {
   const log = getLogger('BooksPage');
@@ -47,9 +48,12 @@ export const BooksPage: React.FC = () => {
     void (async () => {
       try {
         const list = await db.books.toArray();
-        const missing = list.filter((b) => !b.coverUrl);
+        const missing = list.filter((b) => {
+          const url = typeof b.coverUrl === 'string' ? b.coverUrl.trim() : '';
+          return !url || url.startsWith('data:');
+        });
         for (const b of missing) {
-          const url = await fetchBookCover(b.title);
+          const url = await resolveBookCover(b.title);
           if (url) {
             await db.books.update(b.id, { coverUrl: url });
           }
@@ -63,48 +67,13 @@ export const BooksPage: React.FC = () => {
     })();
   }, []);
 
-  const fetchBookCover = async (t: string): Promise<string | undefined> => {
-    try {
-      const s = t.replace(/^(книга|book)\s+/i, '').trim();
-      const q = encodeURIComponent(`intitle:${s}`);
-      const r = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1`);
-      const j = await r.json();
-      const vol = j.items?.[0]?.volumeInfo;
-      const link = vol?.imageLinks?.thumbnail || vol?.imageLinks?.smallThumbnail;
-      if (typeof link === 'string') {
-        return link.replace('http://', 'https://');
-      }
-    } catch (e) {
-      log.warn('fetchBookCover:error', e as Error);
-    }
-    // Try Openverse as a zero-config image search
-    try {
-      const s = t.replace(/^(книга|book)\s+/i, '').trim();
-      const ov = await fetchFirstImageFromOpenverse(`${s} book cover`);
-      if (ov) return ov;
-    } catch (e) {
-      log.warn('fetchBookCover:openverse_error', e as Error);
-    }
-    // Fallback: try Google Custom Search Image
-    try {
-      const s = t.replace(/^(книга|book)\s+/i, '').trim();
-      const alt = await fetchFirstImageFromGoogle(`${s} book cover OR Книга ${s}`);
-      if (alt) return alt;
-    } catch (e) {
-      log.warn('fetchBookCover:google_fallback_error', e as Error);
-    }
-    // Final fallback: Unsplash Source (no key required)
-    const s = t.replace(/^(книга|book)\s+/i, '').trim();
-    return fallbackImageFromUnsplash(s);
-  };
-
   const addItem = async () => {
     const t = title.trim();
     if (!t) return;
     setLoading(true);
     try {
       const id = uuidv4();
-      const coverUrl = await fetchBookCover(t);
+      const coverUrl = await resolveBookCover(t);
       const item: BookItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now(), status: 'active' };
       await db.books.add(item);
       setTitle('');
@@ -180,7 +149,7 @@ export const BooksPage: React.FC = () => {
             <SmartImage
               urls={buildFallbackList('book', b.title, b.coverUrl)}
               alt={b.title}
-              query={!b.coverUrl ? `${b.title} book cover` : undefined}
+              query={(!b.coverUrl || (b.coverUrl || '').startsWith('data:')) ? `${b.title} book cover` : undefined}
               style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
               onResolved={(url) => {
                 if (url && !url.startsWith('data:') && url !== b.coverUrl) {

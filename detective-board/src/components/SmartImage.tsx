@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { fetchFirstImageFromGoogle, fetchFirstImageFromOpenverse } from '../imageSearch';
+import { fetchFirstImageFromGoogle, fetchFirstImageFromOpenverse, fetchFirstImageFromQwant, fetchFirstImageFromWikipedia } from '../imageSearch';
 import { getLogger } from '../logger';
 
 const log = getLogger('SmartImage');
@@ -36,10 +36,22 @@ export const SmartImage: React.FC<SmartImageProps> = ({ urls, alt, style, classN
         if (alive) log.warn('openverse_fetch_failed', e as Error);
       }
       try {
+        const wiki = await fetchFirstImageFromWikipedia(normalized);
+        push(wiki);
+      } catch (e) {
+        if (alive) log.warn('wikipedia_fetch_failed', e as Error);
+      }
+      try {
         const google = await fetchFirstImageFromGoogle(normalized);
         push(google);
       } catch (e) {
         if (alive) log.warn('google_fetch_failed', e as Error);
+      }
+      try {
+        const qwant = await fetchFirstImageFromQwant(normalized);
+        push(qwant);
+      } catch (e) {
+        if (alive) log.warn('qwant_fetch_failed', e as Error);
       }
       if (!alive) return;
       setDynamicUrls(results);

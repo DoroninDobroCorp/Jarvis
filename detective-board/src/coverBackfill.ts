@@ -1,11 +1,19 @@
 import { db } from './db';
 import { getLogger } from './logger';
-import { fetchFirstImageFromGoogle, fetchFirstImageFromOpenverse, fallbackImageFromUnsplash } from './imageSearch';
+import { fetchFirstImageFromGoogle, fetchFirstImageFromOpenverse, fetchFirstImageFromQwant, fetchFirstImageFromWikipedia, fallbackImageFromUnsplash, seededPicsumImage } from './imageSearch';
 
 const log = getLogger('coverBackfill');
 
 function ensureHttps(url: string): string {
   return url.startsWith('http://') ? `https://${url.slice(7)}` : url;
+}
+
+function needsCover(url?: string | null): boolean {
+  if (typeof url !== 'string') return true;
+  const trimmed = url.trim();
+  if (!trimmed) return true;
+  if (trimmed.startsWith('data:')) return true;
+  return false;
 }
 
 export async function resolveBookCover(title: string): Promise<string | undefined> {
@@ -28,6 +36,18 @@ export async function resolveBookCover(title: string): Promise<string | undefine
   } catch (e) {
     log.warn('book:openverse_error', e as Error);
   }
+  try {
+    const wiki = await fetchFirstImageFromWikipedia(s, [`${s} (book)`, `Книга ${s}`, `${s} роман`]);
+    if (wiki) return wiki;
+  } catch (e) {
+    log.warn('book:wikipedia_error', e as Error);
+  }
+  try {
+    const qw = await fetchFirstImageFromQwant(`${s} book cover`);
+    if (qw) return qw;
+  } catch (e) {
+    log.warn('book:qwant_error', e as Error);
+  }
   // Google CSE
   try {
     const alt = await fetchFirstImageFromGoogle(`${s} book cover OR Книга ${s}`);
@@ -35,7 +55,7 @@ export async function resolveBookCover(title: string): Promise<string | undefine
   } catch (e) {
     log.warn('book:cse_error', e as Error);
   }
-  return fallbackImageFromUnsplash(s);
+  return seededPicsumImage(`book-${s}`) || fallbackImageFromUnsplash(s);
 }
 
 export async function resolveMoviePoster(title: string): Promise<string | undefined> {
@@ -59,12 +79,24 @@ export async function resolveMoviePoster(title: string): Promise<string | undefi
     log.warn('movie:openverse_error', e as Error);
   }
   try {
+    const wiki = await fetchFirstImageFromWikipedia(title, [`${title} (film)`, `Фильм ${title}`]);
+    if (wiki) return wiki;
+  } catch (e) {
+    log.warn('movie:wikipedia_error', e as Error);
+  }
+  try {
+    const qw = await fetchFirstImageFromQwant(`${title} movie poster`);
+    if (qw) return qw;
+  } catch (e) {
+    log.warn('movie:qwant_error', e as Error);
+  }
+  try {
     const alt = await fetchFirstImageFromGoogle(`${title} movie poster OR Фильм ${title}`);
     if (alt) return alt;
   } catch (e) {
     log.warn('movie:cse_error', e as Error);
   }
-  return fallbackImageFromUnsplash(title);
+  return seededPicsumImage(`movie-${title}`) || fallbackImageFromUnsplash(title);
 }
 
 export async function resolveGameCover(title: string): Promise<string | undefined> {
@@ -88,12 +120,24 @@ export async function resolveGameCover(title: string): Promise<string | undefine
     log.warn('game:openverse_error', e as Error);
   }
   try {
+    const wiki = await fetchFirstImageFromWikipedia(title, [`${title} (video game)`, `Игра ${title}`]);
+    if (wiki) return wiki;
+  } catch (e) {
+    log.warn('game:wikipedia_error', e as Error);
+  }
+  try {
+    const qw = await fetchFirstImageFromQwant(`${title} game cover`);
+    if (qw) return qw;
+  } catch (e) {
+    log.warn('game:qwant_error', e as Error);
+  }
+  try {
     const alt = await fetchFirstImageFromGoogle(`${title} game cover OR Игра ${title}`);
     if (alt) return alt;
   } catch (e) {
     log.warn('game:cse_error', e as Error);
   }
-  return fallbackImageFromUnsplash(title);
+  return seededPicsumImage(`game-${title}`) || fallbackImageFromUnsplash(title);
 }
 
 export async function resolvePurchaseImage(title: string): Promise<string | undefined> {
@@ -106,24 +150,45 @@ export async function resolvePurchaseImage(title: string): Promise<string | unde
   }
   try {
     const s = title.replace(/^(покупка|товар|product)\s+/i, '').trim();
+    const wiki = await fetchFirstImageFromWikipedia(s, [`${s} (product)`, `товар ${s}`]);
+    if (wiki) return wiki;
+  } catch (e) {
+    log.warn('purchase:wikipedia_error', e as Error);
+  }
+  try {
+    const s = title.replace(/^(покупка|товар|product)\s+/i, '').trim();
+    const qw = await fetchFirstImageFromQwant(`${s} product photo`);
+    if (qw) return qw;
+  } catch (e) {
+    log.warn('purchase:qwant_error', e as Error);
+  }
+  try {
+    const s = title.replace(/^(покупка|товар|product)\s+/i, '').trim();
     const ov = await fetchFirstImageFromOpenverse(`${s} product photo`);
     if (ov) return ov;
   } catch (e) {
     log.warn('purchase:openverse_error', e as Error);
   }
-  return fallbackImageFromUnsplash(title);
+  return seededPicsumImage(`purchase-${title}`) || fallbackImageFromUnsplash(title);
 }
 
 function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
 
-export async function runCoverBackfill(limitPerKind = 50): Promise<void> {
+function takeLimit<T>(list: T[], limit: number): T[] {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return list.slice();
+  }
+  return list.slice(0, limit);
+}
+
+export async function runCoverBackfill(limitPerKind = Number.POSITIVE_INFINITY): Promise<void> {
   const start = Date.now();
   let updated = 0;
   try {
     // Books
     try {
       const books = await db.books.toArray();
-      const missing = books.filter((b) => !b.coverUrl).slice(0, limitPerKind);
+      const missing = takeLimit(books.filter((b) => needsCover(b.coverUrl)), limitPerKind);
       for (const b of missing) {
         const url = await resolveBookCover(b.title);
         if (url) { await db.books.update(b.id, { coverUrl: url }); updated++; }
@@ -133,7 +198,7 @@ export async function runCoverBackfill(limitPerKind = 50): Promise<void> {
     // Movies
     try {
       const movies = await db.movies.toArray();
-      const missing = movies.filter((m) => !m.coverUrl).slice(0, limitPerKind);
+      const missing = takeLimit(movies.filter((m) => needsCover(m.coverUrl)), limitPerKind);
       for (const m of missing) {
         const url = await resolveMoviePoster(m.title);
         if (url) { await db.movies.update(m.id, { coverUrl: url }); updated++; }
@@ -143,7 +208,7 @@ export async function runCoverBackfill(limitPerKind = 50): Promise<void> {
     // Games
     try {
       const games = await db.games.toArray();
-      const missing = games.filter((g) => !g.coverUrl).slice(0, limitPerKind);
+      const missing = takeLimit(games.filter((g) => needsCover(g.coverUrl)), limitPerKind);
       for (const g of missing) {
         const url = await resolveGameCover(g.title);
         if (url) { await db.games.update(g.id, { coverUrl: url }); updated++; }
@@ -153,7 +218,7 @@ export async function runCoverBackfill(limitPerKind = 50): Promise<void> {
     // Purchases
     try {
       const purchases = await db.purchases.toArray();
-      const missing = purchases.filter((p) => !p.coverUrl).slice(0, limitPerKind);
+      const missing = takeLimit(purchases.filter((p) => needsCover(p.coverUrl)), limitPerKind);
       for (const p of missing) {
         const url = await resolvePurchaseImage(p.title);
         if (url) { await db.purchases.update(p.id, { coverUrl: url }); updated++; }

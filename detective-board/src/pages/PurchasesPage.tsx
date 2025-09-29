@@ -4,11 +4,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { PurchaseItem } from '../types';
 import { getLogger } from '../logger';
-import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList, fetchFirstImageFromOpenverse } from '../imageSearch';
+import { buildFallbackList } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
 import { useGamificationStore } from '../gamification';
 import type { TaskPathInfo } from '../taskUtils';
+import { resolvePurchaseImage } from '../coverBackfill';
 
 export const PurchasesPage: React.FC = () => {
   const log = getLogger('PurchasesPage');
@@ -47,9 +48,12 @@ export const PurchasesPage: React.FC = () => {
     void (async () => {
       try {
         const list = await db.purchases.toArray();
-        const missing = list.filter((p) => !p.coverUrl);
+        const missing = list.filter((p) => {
+          const url = typeof p.coverUrl === 'string' ? p.coverUrl.trim() : '';
+          return !url || url.startsWith('data:');
+        });
         for (const p of missing) {
-          const url = await fetchProductImage(p.title);
+          const url = await resolvePurchaseImage(p.title);
           if (url) {
             await db.purchases.update(p.id, { coverUrl: url });
           }
@@ -63,31 +67,13 @@ export const PurchasesPage: React.FC = () => {
     })();
   }, []);
 
-  const fetchProductImage = async (t: string): Promise<string | undefined> => {
-    try {
-      const s = t.replace(/^(покупка|товар|product)\s+/i, '').trim();
-      const alt = await fetchFirstImageFromGoogle(`${s} product photo OR Товар ${s}`);
-      if (alt) return alt;
-    } catch (e) {
-      log.warn('fetchProductImage:error', e as Error);
-    }
-    try {
-      const s = t.replace(/^(покупка|товар|product)\s+/i, '').trim();
-      const ov = await fetchFirstImageFromOpenverse(`${s} product photo`);
-      if (ov) return ov;
-    } catch (e) {
-      log.warn('fetchProductImage:openverse_error', e as Error);
-    }
-    return fallbackImageFromUnsplash(t);
-  };
-
   const addItem = async () => {
     const t = title.trim();
     if (!t) return;
     setLoading(true);
     try {
       const id = uuidv4();
-      const coverUrl = await fetchProductImage(t);
+      const coverUrl = await resolvePurchaseImage(t);
       const item: PurchaseItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now(), status: 'active' };
       await db.purchases.add(item);
       setTitle('');
@@ -162,7 +148,7 @@ export const PurchasesPage: React.FC = () => {
             <SmartImage
               urls={buildFallbackList('purchase', p.title, p.coverUrl)}
               alt={p.title}
-              query={!p.coverUrl ? `${p.title} product photo` : undefined}
+              query={(!p.coverUrl || (p.coverUrl || '').startsWith('data:')) ? `${p.title} product photo` : undefined}
               style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
               onResolved={(url) => {
                 if (url && !url.startsWith('data:') && url !== p.coverUrl) {

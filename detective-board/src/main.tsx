@@ -8,6 +8,7 @@ import { auditAndFixAllCovers } from './coverAudit';
 import { BrowserRouter } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { getLogger } from './logger';
+import { db } from './db';
 
 const log = getLogger('main');
 
@@ -161,11 +162,34 @@ try {
           forceBackfill = sp.get('backfill') === '1';
           forceAudit = sp.get('audit') === '1';
         } catch { /* ignore */ }
-        if (!forceBackfill && Date.now() - last < twelveHours) {
-          log.info('coverBackfill:skip_recent');
+        const [booksMissing, moviesMissing, gamesMissing, purchasesMissing] = await Promise.all([
+          db.books.filter((b) => {
+            const url = typeof b.coverUrl === 'string' ? b.coverUrl.trim() : '';
+            return !url || url.startsWith('data:');
+          }).count(),
+          db.movies.filter((m) => {
+            const url = typeof m.coverUrl === 'string' ? m.coverUrl.trim() : '';
+            return !url || url.startsWith('data:');
+          }).count(),
+          db.games.filter((g) => {
+            const url = typeof g.coverUrl === 'string' ? g.coverUrl.trim() : '';
+            return !url || url.startsWith('data:');
+          }).count(),
+          db.purchases.filter((p) => {
+            const url = typeof p.coverUrl === 'string' ? p.coverUrl.trim() : '';
+            return !url || url.startsWith('data:');
+          }).count(),
+        ]);
+        const totalMissing = booksMissing + moviesMissing + gamesMissing + purchasesMissing;
+        const stale = Date.now() - last >= twelveHours;
+        if (!forceBackfill && !stale && totalMissing === 0) {
+          log.info('coverBackfill:skip_recent', { missing: { books: booksMissing, movies: moviesMissing, games: gamesMissing, purchases: purchasesMissing } });
         } else {
-          log.info('coverBackfill:start');
-          await runCoverBackfill(100);
+          log.info('coverBackfill:start', {
+            reason: forceBackfill ? 'forced' : (totalMissing > 0 ? 'missing_detected' : 'stale_timer'),
+            missing: { books: booksMissing, movies: moviesMissing, games: gamesMissing, purchases: purchasesMissing },
+          });
+          await runCoverBackfill();
           try { localStorage.setItem(key, String(Date.now())); } catch { /* ignore */ }
           log.info('coverBackfill:done');
         }

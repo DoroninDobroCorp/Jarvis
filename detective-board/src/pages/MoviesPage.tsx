@@ -4,11 +4,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { MovieItem } from '../types';
 import { getLogger } from '../logger';
-import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList, fetchFirstImageFromOpenverse } from '../imageSearch';
+import { buildFallbackList } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
 import { useGamificationStore } from '../gamification';
 import type { TaskPathInfo } from '../taskUtils';
+import { resolveMoviePoster } from '../coverBackfill';
 
 export const MoviesPage: React.FC = () => {
   const log = getLogger('MoviesPage');
@@ -47,9 +48,12 @@ export const MoviesPage: React.FC = () => {
     void (async () => {
       try {
         const list = await db.movies.toArray();
-        const missing = list.filter((m) => !m.coverUrl);
+        const missing = list.filter((m) => {
+          const url = typeof m.coverUrl === 'string' ? m.coverUrl.trim() : '';
+          return !url || url.startsWith('data:');
+        });
         for (const m of missing) {
-          const url = await fetchPoster(m.title);
+          const url = await resolveMoviePoster(m.title);
           if (url) {
             await db.movies.update(m.id, { coverUrl: url });
           }
@@ -63,47 +67,13 @@ export const MoviesPage: React.FC = () => {
     })();
   }, []);
 
-  const fetchPoster = async (t: string): Promise<string | undefined> => {
-    try {
-      const q = encodeURIComponent(t);
-      const r = await fetch(`https://itunes.apple.com/search?term=${q}&media=movie&limit=1`);
-      const j = await r.json();
-      const res = j.results?.[0];
-      let art: string | undefined = res?.artworkUrl100 || res?.artworkUrl60;
-      if (typeof art === 'string') {
-        art = art.replace('http://', 'https://');
-        // upscale to 600x600 if possible
-        art = art.replace(/100x100bb\.jpg$/, '600x600bb.jpg');
-        return art;
-      }
-    } catch (e) {
-      log.warn('fetchPoster:error', e as Error);
-    }
-    // Try Openverse as zero-config search
-    try {
-      const ov = await fetchFirstImageFromOpenverse(`${t} movie poster`);
-      if (ov) return ov;
-    } catch (e) {
-      log.warn('fetchPoster:openverse_error', e as Error);
-    }
-    // Fallback: Google Custom Search Image
-    try {
-      const alt = await fetchFirstImageFromGoogle(`${t} movie poster OR Фильм ${t}`);
-      if (alt) return alt;
-    } catch (e) {
-      log.warn('fetchPoster:google_fallback_error', e as Error);
-    }
-    // Final fallback: Unsplash Source (no key required)
-    return fallbackImageFromUnsplash(t);
-  };
-
   const addItem = async () => {
     const t = title.trim();
     if (!t) return;
     setLoading(true);
     try {
       const id = uuidv4();
-      const coverUrl = await fetchPoster(t);
+      const coverUrl = await resolveMoviePoster(t);
       const item: MovieItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now(), status: 'active' };
       await db.movies.add(item);
       setTitle('');
@@ -178,7 +148,7 @@ export const MoviesPage: React.FC = () => {
             <SmartImage
               urls={buildFallbackList('movie', m.title, m.coverUrl)}
               alt={m.title}
-              query={!m.coverUrl ? `${m.title} movie poster` : undefined}
+              query={(!m.coverUrl || (m.coverUrl || '').startsWith('data:')) ? `${m.title} movie poster` : undefined}
               style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
               onResolved={(url) => {
                 if (url && !url.startsWith('data:') && url !== m.coverUrl) {
