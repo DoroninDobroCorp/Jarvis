@@ -11,15 +11,11 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed --project=chromium",
     "pw:install": "playwright install",
-    "prepare": "husky install",
     "check": "npm run lint && npm run test:e2e"
   },
   "dependencies": {
-    "clsx": "^2.1.1",
-    "date-fns": "^4.1.0",
     "dexie": "^4.2.0",
     "konva": "^10.0.2",
-    "puppeteer": "^24.22.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-konva": "^19.0.10",
@@ -39,7 +35,6 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^16.3.0",
-    "husky": "^9.1.6",
     "node-fetch": "^3.3.2",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.39.1",

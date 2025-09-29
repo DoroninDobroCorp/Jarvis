@@ -13,6 +13,10 @@ dist-ssr
 .env.local
 .tg_chat_ids.json
 
+# Test results
+test-results
+playwright-report
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

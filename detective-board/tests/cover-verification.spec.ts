@@ -16,7 +16,7 @@ test.describe('Cover Image Verification', () => {
 
     const items = await page.locator('div[style*="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))"] > div').all();
 
-    expect(items.length).toBeGreaterThan(0, 'No book items found on the page.');
+    expect(items.length).toBeGreaterThan(0);
 
     let placeholdersFound = 0;
     const failedItems: { title: string, src: string }[] = [];
@@ -38,6 +38,6 @@ test.describe('Cover Image Verification', () => {
     }
 
     // Тест упадет, если найден хотя бы один плейсхолдер
-    expect(placeholdersFound).toBe(0, 'Placeholder images were found on the page.');
+    expect(placeholdersFound).toBe(0);
   });
 });

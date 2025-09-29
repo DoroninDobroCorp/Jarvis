@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
-import './App.css';
 import { useAppStore } from './store';
 import { BoardCanvas } from './components/BoardCanvas';
 import { Toolbar } from './components/Toolbar';
