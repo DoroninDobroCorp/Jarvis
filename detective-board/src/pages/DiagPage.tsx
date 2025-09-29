@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { db } from '../db';
 import type { AnyNode, LinkThread } from '../types';
 import { getLogger } from '../logger';
+import { runCoverBackfill } from '../coverBackfill';
 
 interface GraphReport {
   nodeCount: number;
@@ -61,6 +62,7 @@ export const DiagPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [fixing, setFixing] = useState(false);
   const [message, setMessage] = useState<string>('');
+  const [covers, setCovers] = useState<{ books: number; booksMissing: number; movies: number; moviesMissing: number; games: number; gamesMissing: number; purchases: number; purchasesMissing: number } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -69,6 +71,26 @@ export const DiagPage: React.FC = () => {
       setNodes(n); setLinks(l);
       log.info('load:db:snapshot', { nodes: n.length, links: l.length });
       setMessage('');
+      try {
+        const [books, movies, games, purchases] = await Promise.all([
+          db.books.toArray(),
+          db.movies.toArray(),
+          db.games.toArray(),
+          db.purchases.toArray().catch(() => []),
+        ]);
+        setCovers({
+          books: books.length,
+          booksMissing: books.filter(b => !b.coverUrl).length,
+          movies: movies.length,
+          moviesMissing: movies.filter(m => !m.coverUrl).length,
+          games: games.length,
+          gamesMissing: games.filter(g => !g.coverUrl).length,
+          purchases: purchases.length,
+          purchasesMissing: purchases.filter(p => !p.coverUrl).length,
+        });
+      } catch (e) {
+        log.warn('diag:covers:load_failed', { error: String(e instanceof Error ? e.message : e) });
+      }
     } finally {
       setLoading(false);
     }
@@ -159,6 +181,30 @@ export const DiagPage: React.FC = () => {
       <div style={{ display: 'grid', gap: 8, maxWidth: 820 }}>
         <div>Узлы: <b>{report.nodeCount}</b>, Связи: <b>{report.linkCount}</b></div>
         <div>Невалидные parentId: <b>{report.invalidParentIds.length}</b>; Самоссылающиеся: <b>{report.selfParent.length}</b>; Циклы: <b>{report.cycles.length}</b>; Битые ссылки: <b>{report.brokenLinks.length}</b></div>
+        {covers ? (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Обложки</div>
+            <div>Книги: {covers.books} (без обложки: {covers.booksMissing})</div>
+            <div>Фильмы: {covers.movies} (без обложки: {covers.moviesMissing})</div>
+            <div>Игры: {covers.games} (без обложки: {covers.gamesMissing})</div>
+            <div>Покупки: {covers.purchases} (без обложки: {covers.purchasesMissing})</div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+              <button className="tool-btn" onClick={() => { void load(); }} disabled={loading}>Обновить</button>
+              <button
+                className="tool-btn"
+                onClick={async () => {
+                  setFixing(true);
+                  try {
+                    await runCoverBackfill(200);
+                    await load();
+                    setMessage('Бэкфилл обложек выполнен');
+                  } finally { setFixing(false); }
+                }}
+                disabled={fixing}
+              >Запустить бэкфилл обложек</button>
+            </div>
+          </div>
+        ) : null}
         {report.invalidParentIds.length > 0 && (
           <details>
             <summary>Список невалидных parentId</summary>

@@ -3,11 +3,20 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import './errorOverlay';
 import App from './App.tsx';
+import { runCoverBackfill } from './coverBackfill';
+import { auditAndFixAllCovers } from './coverAudit';
 import { BrowserRouter } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { getLogger } from './logger';
 
 const log = getLogger('main');
+
+declare global {
+  interface Window {
+    __coverAudit?: typeof auditAndFixAllCovers;
+    __coverBackfill?: typeof runCoverBackfill;
+  }
+}
 try {
   // Force sane defaults on each load to avoid old noisy settings
   const url = new URL(window.location.href);
@@ -128,3 +137,53 @@ createRoot(document.getElementById('root')!).render(
 );
 
 log.info('app:rendered');
+
+// Dev helpers: экспорт в window
+try {
+  if (import.meta.env.DEV) {
+    window.__coverAudit = auditAndFixAllCovers;
+    window.__coverBackfill = runCoverBackfill;
+  }
+} catch { /* ignore */ }
+
+// Fire-and-forget: глобальный бэкфилл обложек для уже существующих элементов
+try {
+  setTimeout(() => {
+    (async () => {
+      try {
+        const key = 'COVER_BACKFILL_TS';
+        const last = Number(localStorage.getItem(key) || '0');
+        const twelveHours = 12 * 60 * 60 * 1000;
+        let forceBackfill = false;
+        let forceAudit = false;
+        try {
+          const sp = new URLSearchParams(location.search);
+          forceBackfill = sp.get('backfill') === '1';
+          forceAudit = sp.get('audit') === '1';
+        } catch { /* ignore */ }
+        if (!forceBackfill && Date.now() - last < twelveHours) {
+          log.info('coverBackfill:skip_recent');
+        } else {
+          log.info('coverBackfill:start');
+          await runCoverBackfill(100);
+          try { localStorage.setItem(key, String(Date.now())); } catch { /* ignore */ }
+          log.info('coverBackfill:done');
+        }
+        // Аудит/исправление: прогоняет загрузку изображений и гарантирует рабочие URL
+        try {
+          log.info('coverAudit:start');
+          const res = await auditAndFixAllCovers(500, 6);
+          log.info('coverAudit:done', res);
+        } catch (e) {
+          if (forceAudit) {
+            log.warn('coverAudit:failed', { error: String(e instanceof Error ? e.message : e) });
+          }
+        }
+      } catch (e) {
+        log.warn('coverBackfill:failed', { error: String(e instanceof Error ? e.message : e) });
+      }
+    })();
+  }, 0);
+} catch (e) {
+  log.warn('coverBackfill:init_failed', { error: String(e instanceof Error ? e.message : e) });
+}

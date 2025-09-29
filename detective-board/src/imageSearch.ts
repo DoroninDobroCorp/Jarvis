@@ -13,6 +13,22 @@ interface CSEApiResponse {
   items?: CSEImageItem[];
 }
 
+interface OpenverseItem {
+  url?: string;
+  thumbnail?: string;
+}
+
+interface OpenverseResponse {
+  results?: OpenverseItem[];
+}
+
+function ensureHttps(url: string): string {
+  if (url.startsWith('http://')) {
+    return `https://${url.slice(7)}`;
+  }
+  return url;
+}
+
 /**
  * Unsplash Source fallback (no API key required). Returns a URL that redirects
  * to a random image relevant to the query. We keep size at 600x600 to match UI.
@@ -35,6 +51,50 @@ export function placeholderDataUri(text: string, w = 600, h = 600): string {
   const safe = xmlEscape(text);
   const svg = `<?xml version="1.0" encoding="UTF-8"?><svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}'><rect width='100%' height='100%' fill='#f2f2f2'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-family='-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif' font-size='24' fill='#888'>${safe}</text></svg>`;
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+export async function fetchFirstImageFromOpenverse(query: string): Promise<string | undefined> {
+  try {
+    const cacheKey = `img:openverse:${query.toLowerCase()}`;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached) as { url?: string; ts?: number } | null;
+        if (parsed?.url && typeof parsed.ts === 'number') {
+          const ageDays = (Date.now() - parsed.ts) / (1000 * 60 * 60 * 24);
+          if (ageDays <= 14) {
+            return parsed.url;
+          }
+        }
+      }
+    } catch {/* noop */}
+
+    const q = encodeURIComponent(query.trim());
+    if (!q) return undefined;
+    const resp = await fetch(`https://api.openverse.engineering/v1/images/?page_size=5&mature=false&format=json&q=${q}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!resp.ok) {
+      log.warn('openverse:bad_status', { status: resp.status });
+      return undefined;
+    }
+    const data: OpenverseResponse = await resp.json();
+    // Лучше использовать thumbnail (статический прямой jpeg), чем оригинальный url (может быть html-страницей)
+    const pick = data?.results?.find((item) => item?.thumbnail || item?.url);
+    if (pick) {
+      const candidate = pick.thumbnail || pick.url;
+      if (typeof candidate === 'string' && candidate) {
+        const url = ensureHttps(candidate);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ url, ts: Date.now() }));
+        } catch {/* noop */}
+        return url;
+      }
+    }
+  } catch (e) {
+    log.warn('openverse:error', e as Error);
+  }
+  return undefined;
 }
 
 export function buildFallbackList(kind: 'book' | 'game' | 'movie' | 'purchase', title: string, existing?: string): string[] {

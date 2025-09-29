@@ -78,7 +78,10 @@ export const InspectorPanel: React.FC = () => {
           Срок
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <input
-              type="date"
+              type="text"
+              inputMode="numeric"
+              placeholder="YYYY-MM-DD"
+              maxLength={10}
               value={dueLocal}
               onChange={(e) => {
                 const v = e.target.value;

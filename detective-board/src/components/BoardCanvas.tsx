@@ -1396,7 +1396,10 @@ export const BoardCanvas: React.FC = () => {
               <label style={{ display: 'block', marginBottom: 6 }}>Дедлайн
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <input
-                    type="date"
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="YYYY-MM-DD"
+                    maxLength={10}
                     style={{ flex: 1 }}
                     className="date-no-icon"
                     value={ctxDueLocal}
@@ -1504,7 +1507,10 @@ export const BoardCanvas: React.FC = () => {
                           placeholder="Каждые N дней"
                         />
                         <input
-                          type="date"
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="YYYY-MM-DD"
+                          maxLength={10}
                           style={{ background: '#2a2a2a', color: '#fff', border: '1px solid #444', borderRadius: 4, padding: '4px 6px' }}
                           value={(() => { const r = (ctxNode as TaskNode).recurrence as Recurrence | undefined; return r && r.kind === 'interval' ? r.anchorDate.slice(0,10) : todayYMD(); })()}
                           onChange={(e) => {

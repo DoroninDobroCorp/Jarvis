@@ -130,9 +130,12 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
 
   const parseAndStoreRatings = async (chatId: number, text: string, msgTs: number | undefined) => {
     const trimmed = text.trim();
-    const match = trimmed.match(/^(?:wb\s+)?(\d{1,2})[\s,;]+(\d{1,2})[\s,;]+(\d{1,2})$/i);
-    if (!match) return false;
-    const [aw, ef, joy] = match.slice(1, 4).map((val) => clampRating(Number(val)));
+    // Поддерживаем формат X/Y/Z (например, 7/8/9), а также старый формат с пробелами
+    const slash = trimmed.match(/^(?:wb\s+)?(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{1,2})$/i);
+    const spaced = !slash && trimmed.match(/^(?:wb\s+)?(\d{1,2})[\s,;]+(\d{1,2})[\s,;]+(\d{1,2})$/i);
+    const m = slash || spaced;
+    if (!m) return false;
+    const [aw, ef, joy] = m.slice(1, 4).map((val) => clampRating(Number(val)));
     await storeRatings(chatId, aw, ef, joy, msgTs);
     return true;
   };
@@ -164,7 +167,7 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
     if (typeof message.text === 'string') {
       const text: string = message.text;
       if (text.startsWith('/start')) {
-        await sendMessage(chatId, 'Привет! Я буду периодически спрашивать про самочувствие. Ответь в формате "wb 7 8 9" (осознанность, эффективность, удовольствие) или нажми кнопки в опросе.');
+        await sendMessage(chatId, 'Привет! Я буду периодически спрашивать про самочувствие. Ответь в формате 7/8/9 (осознанность/эффективность/удовольствие).');
         return;
       }
       if (text.startsWith('/ping')) {
@@ -182,23 +185,10 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
       scheduleNextQuestion(30_000);
       return;
     }
-    const text = 'Как твоё состояние? Пришли ответы в формате "wb 7 8 9" (осознанность / эффективность / удовольствие) или воспользуйся кнопками ниже.';
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '5 / 5 / 5', callback_data: 'wb:5:5:5' },
-          { text: '7 / 7 / 7', callback_data: 'wb:7:7:7' },
-          { text: '9 / 9 / 9', callback_data: 'wb:9:9:9' },
-        ],
-        [
-          { text: '10 / 8 / 6', callback_data: 'wb:10:8:6' },
-          { text: '6 / 8 / 10', callback_data: 'wb:6:8:10' },
-        ],
-      ],
-    };
+    const text = 'Как твоё состояние? Пришли ответ в формате 7/8/9 (осознанность/эффективность/удовольствие).';
     let sent = 0;
     for (const chatId of chatIds) {
-      const payload = { chat_id: chatId, text, reply_markup: keyboard };
+      const payload = { chat_id: chatId, text };
       const result = await sendRequest('/sendMessage', { method: 'POST', body: JSON.stringify(payload) });
       if (result) sent += 1;
     }

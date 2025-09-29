@@ -404,7 +404,7 @@ const CompletedTasksPage: React.FC = () => {
                   title={item.comment || item.title}
                   aria-label={item.title}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <div className="active-item__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                     <span className="badge">{labelMap[category]}</span>
                     <span className="badge" style={{ background: xp && xp < 0 ? '#fdebea' : '#e6f4ea', color: xp && xp < 0 ? '#a13737' : '#246b35' }}>
                       {xpBadgeValue(xp)}
@@ -413,14 +413,28 @@ const CompletedTasksPage: React.FC = () => {
                   <SmartImage
                     urls={buildFallbackList(category, item.title, item.coverUrl)}
                     alt={item.title}
+                    query={!item.coverUrl ? `${item.title} ${labelMap[category]}` : undefined}
                     style={{ width: '100%', height: 212, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
+                    onResolved={(url) => {
+                      if (!url || url.startsWith('data:')) return;
+                      if (category === 'book') {
+                        void db.books.update(item.id, { coverUrl: url });
+                      } else if (category === 'movie') {
+                        void db.movies.update(item.id, { coverUrl: url });
+                      } else if (category === 'game') {
+                        void db.games.update(item.id, { coverUrl: url });
+                      } else {
+                        void db.purchases.update(item.id, { coverUrl: url });
+                      }
+                    }}
                   />
-                  <div className="active-item__title">{item.title}</div>
-                  {item.comment ? <div className="active-item__desc">{item.comment}</div> : null}
+                  <div className="active-item__content">
+                    <div className="active-item__title">{item.title}</div>
+                    {item.comment ? <div className="active-item__desc">{item.comment}</div> : null}
+                  </div>
                   <div className="active-item__meta" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 8 }}>
                     {timeLabel ? <span className="badge">⏱ {timeLabel}</span> : null}
                     <button
-                      className="tool-btn"
                       title="Удалить"
                       aria-label="Удалить"
                       onClick={() => { void handleDeleteManual(category, item.id); }}

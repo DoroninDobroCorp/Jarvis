@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { PurchaseItem } from '../types';
 import { getLogger } from '../logger';
-import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList } from '../imageSearch';
+import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList, fetchFirstImageFromOpenverse } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
 import { useGamificationStore } from '../gamification';
@@ -70,6 +70,13 @@ export const PurchasesPage: React.FC = () => {
       if (alt) return alt;
     } catch (e) {
       log.warn('fetchProductImage:error', e as Error);
+    }
+    try {
+      const s = t.replace(/^(покупка|товар|product)\s+/i, '').trim();
+      const ov = await fetchFirstImageFromOpenverse(`${s} product photo`);
+      if (ov) return ov;
+    } catch (e) {
+      log.warn('fetchProductImage:openverse_error', e as Error);
     }
     return fallbackImageFromUnsplash(t);
   };
@@ -155,6 +162,7 @@ export const PurchasesPage: React.FC = () => {
             <SmartImage
               urls={buildFallbackList('purchase', p.title, p.coverUrl)}
               alt={p.title}
+              query={!p.coverUrl ? `${p.title} product photo` : undefined}
               style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
               onResolved={(url) => {
                 if (url && !url.startsWith('data:') && url !== p.coverUrl) {

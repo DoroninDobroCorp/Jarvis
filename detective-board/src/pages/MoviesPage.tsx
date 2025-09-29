@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { MovieItem } from '../types';
 import { getLogger } from '../logger';
-import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList } from '../imageSearch';
+import { fetchFirstImageFromGoogle, fallbackImageFromUnsplash, buildFallbackList, fetchFirstImageFromOpenverse } from '../imageSearch';
 import SmartImage from '../components/SmartImage';
 import ExtrasSwitcher from '../components/ExtrasSwitcher';
 import { useGamificationStore } from '../gamification';
@@ -78,6 +78,13 @@ export const MoviesPage: React.FC = () => {
       }
     } catch (e) {
       log.warn('fetchPoster:error', e as Error);
+    }
+    // Try Openverse as zero-config search
+    try {
+      const ov = await fetchFirstImageFromOpenverse(`${t} movie poster`);
+      if (ov) return ov;
+    } catch (e) {
+      log.warn('fetchPoster:openverse_error', e as Error);
     }
     // Fallback: Google Custom Search Image
     try {
@@ -171,6 +178,7 @@ export const MoviesPage: React.FC = () => {
             <SmartImage
               urls={buildFallbackList('movie', m.title, m.coverUrl)}
               alt={m.title}
+              query={!m.coverUrl ? `${m.title} movie poster` : undefined}
               style={{ width: '100%', height: 260, objectFit: 'cover', borderRadius: 6, marginBottom: 8 }}
               onResolved={(url) => {
                 if (url && !url.startsWith('data:') && url !== m.coverUrl) {

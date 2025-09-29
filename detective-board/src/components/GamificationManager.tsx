@@ -400,7 +400,10 @@ const GamificationManager: React.FC = () => {
               Дата выполнения
               <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
                 <input
-                  type="date"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="YYYY-MM-DD"
+                  maxLength={10}
                   value={completionDate}
                   onChange={(e) => {
                     setCompletionDate(e.target.value);

@@ -1,4 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { fetchFirstImageFromGoogle, fetchFirstImageFromOpenverse } from '../imageSearch';
+import { getLogger } from '../logger';
+
+const log = getLogger('SmartImage');
 
 export interface SmartImageProps {
   urls: string[];
@@ -6,10 +10,50 @@ export interface SmartImageProps {
   style?: React.CSSProperties;
   className?: string;
   onResolved?: (url: string, index: number) => void;
+  query?: string;
 }
 
-export const SmartImage: React.FC<SmartImageProps> = ({ urls, alt, style, className, onResolved }) => {
-  const list = useMemo(() => urls.filter(Boolean), [urls]);
+export const SmartImage: React.FC<SmartImageProps> = ({ urls, alt, style, className, onResolved, query }) => {
+  const [dynamicUrls, setDynamicUrls] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      if (!query || !query.trim()) {
+        setDynamicUrls([]);
+        return;
+      }
+      setDynamicUrls([]);
+      const normalized = query.trim();
+      const results: string[] = [];
+      const push = (url?: string) => {
+        if (!alive || !url) return;
+        if (!results.includes(url)) results.push(url);
+      };
+      try {
+        const ov = await fetchFirstImageFromOpenverse(normalized);
+        push(ov);
+      } catch (e) {
+        if (alive) log.warn('openverse_fetch_failed', e as Error);
+      }
+      try {
+        const google = await fetchFirstImageFromGoogle(normalized);
+        push(google);
+      } catch (e) {
+        if (alive) log.warn('google_fetch_failed', e as Error);
+      }
+      if (!alive) return;
+      setDynamicUrls(results);
+    };
+    void load();
+    return () => {
+      alive = false;
+    };
+  }, [query]);
+
+  const list = useMemo(() => {
+    const merged = [...dynamicUrls, ...urls].filter(Boolean);
+    return merged.filter((url, idx) => merged.indexOf(url) === idx);
+  }, [dynamicUrls, urls]);
   const [idx, setIdx] = useState(0);
   const reportedRef = useRef<string | null>(null);
 
@@ -23,7 +67,6 @@ export const SmartImage: React.FC<SmartImageProps> = ({ urls, alt, style, classN
   const src = list[idx] || '';
 
   return (
-    // eslint-disable-next-line jsx-a11y/alt-text
     <img
       src={src}
       alt={alt}
