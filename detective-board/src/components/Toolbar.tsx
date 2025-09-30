@@ -49,9 +49,6 @@ export const Toolbar: React.FC = () => {
   const revealNode = useAppStore((s) => s.revealNode);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
-  const perfModeOverride = useAppStore((s) => s.perfModeOverride);
-  const setPerfModeOverride = useAppStore((s) => s.setPerfModeOverride);
-  const resetAll = useAppStore((s) => s.resetAll);
   const nodes = useAppStore((s) => s.nodes);
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -484,82 +481,62 @@ export const Toolbar: React.FC = () => {
           </div>
         ) : null}
       </div>
+      {/* Группа: Действия с объектами */}
       <div className="tool-group">
-        <ToolButton onClick={() => { log.info('assistant:open'); setAssistantOpen(true); }} title="ИИ-ассистент">👩‍💻</ToolButton>
         <ToolButton onClick={() => { log.info('deleteSelection:click'); void deleteSelection(); }} title="Удалить выбранное">🗑️</ToolButton>
         <ToolButton onClick={() => { log.info('goUp:click'); goUp(); }} title="Вверх по уровню">⬆️</ToolButton>
       </div>
+      {/* Группа: ИИ-Ассистент и Дневник */}
       <div className="tool-group">
-        <Link
-          to="/active"
-          className="tool-link"
-          title="Активные задачи"
-          aria-label="Активные задачи"
-          style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          🔥
-        </Link>
-        <Link
-          to="/done"
-          className="tool-link"
-          title="Выполненные задачи"
-          aria-label="Выполненные задачи"
-          style={{ marginLeft: 8, padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          ✅
-        </Link>
-        <div style={{ marginLeft: 12 }}>
-          <label style={{ color: 'var(--text)', marginRight: 6 }}>Допстраницы</label>
-          <select aria-label="Допстраницы" onChange={(e) => { const v = e.target.value; if (v) { navigate(v); e.currentTarget.selectedIndex = 0; } }}>
-            <option value="">— выбрать —</option>
-            <option value="/books">Книги</option>
-            <option value="/movies">Фильмы</option>
-            <option value="/games">Игры</option>
-            <option value="/purchases">Покупки</option>
-            <option value="/achievements">Достижения</option>
-          </select>
+        <ToolButton onClick={() => { log.info('assistant:open'); setAssistantOpen(true); }} title="ИИ-ассистент">👩‍💻</ToolButton>
+        <Link to="/diary" className="tool-link" title="Дневник" style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📔</Link>
+      </div>
+      {/* Группа: Задачи */}
+      <div className="tool-group">
+        <Link to="/active" className="tool-link" title="Активные задачи" aria-label="Активные задачи" style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🔥</Link>
+        <Link to="/done" className="tool-link" title="Выполненные задачи" aria-label="Выполненные задачи" style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✅</Link>
+      </div>
+      {/* Группа: Коллекции */}
+      <div className="tool-group">
+        <Link to="/books" className="tool-link" title="Книги" style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>📚</Link>
+        <Link to="/movies" className="tool-link" title="Фильмы" style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🎬</Link>
+        <Link to="/games" className="tool-link" title="Игры" style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🎮</Link>
+        <Link to="/purchases" className="tool-link" title="Покупки" style={{ padding: 8, minWidth: 42, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🛒</Link>
+      </div>
+      {/* Группа: История и Вид */}
+      <div className="tool-group">
+        <button className="tool-btn" title="Отменить (Cmd/Ctrl+Z)" onClick={() => { void undo(); }}>↶</button>
+        <button className="tool-btn" title="Вернуть (Shift+Cmd/Ctrl+Z / Ctrl+Y)" onClick={() => { void redo(); }}>↷</button>
+        <button className="tool-btn" title="Полноэкранный режим" onClick={() => {
+          if (!document.fullscreenElement) {
+            void document.documentElement.requestFullscreen();
+          } else {
+            void document.exitFullscreen();
+          }
+        }}>⛶</button>
+        <button className="tool-btn" title="Запомнить текущий центр вида" onClick={saveStartCenter}>📍</button>
+      </div>
+      {/* Группа: Импорт/Экспорт */}
+      <div className="tool-group">
+        <div ref={exportMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+          <button className="tool-btn" title="Экспорт" onClick={() => setExportMenuOpen((v) => !v)}>⤓ Экспорт</button>
+          {exportMenuOpen ? (
+            <div style={{ position: 'absolute', right: 0, top: '100%', background: '#222', color: '#fff', border: '1px solid #444', borderRadius: 6, padding: 8, minWidth: 220, zIndex: 1000, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}>
+              <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Экспортировать все данные" onClick={() => { log.info('export:click'); void exportBackup(); setExportMenuOpen(false); }}>⤓ Экспорт базы</button>
+              <button className="tool-btn" style={{ display: 'block', width: '100%', marginTop: 6 }} title="Экспортировать контекст ассистента" onClick={() => { log.info('export:assistant-context'); void exportAssistantContext(); setExportMenuOpen(false); }}>🧠 Контекст ассистента</button>
+            </div>
+          ) : null}
         </div>
-        <div style={{ marginLeft: 12 }}>
-          <label style={{ color: 'var(--text)', marginRight: 6 }}>Режим</label>
-          <select aria-label="Режим производительности" title="Режим производительности" value={perfModeOverride} onChange={(e) => setPerfModeOverride(e.target.value as 'auto' | 'perf' | 'super')}>
-            <option value="auto">Авто</option>
-            <option value="perf">Эконом</option>
-            <option value="super">Супер</option>
-          </select>
+        <div ref={importMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+          <button className="tool-btn" title="Импорт" onClick={() => setImportMenuOpen((v) => !v)}>⤒ Импорт</button>
+          {importMenuOpen ? (
+            <div style={{ position: 'absolute', right: 0, top: '100%', background: '#222', color: '#fff', border: '1px solid #444', borderRadius: 6, padding: 8, minWidth: 220, zIndex: 1000, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}>
+              <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Импорт (замена)" onClick={() => { onPickFile('replace'); setImportMenuOpen(false); }}>⤒ Импорт (замена)</button>
+              <button className="tool-btn" style={{ display: 'block', width: '100%', marginTop: 6 }} title="Импорт (merge)" onClick={() => { onPickFile('merge'); setImportMenuOpen(false); }}>⤒ Импорт (merge)</button>
+            </div>
+          ) : null}
         </div>
-        <div style={{ marginLeft: 12, display: 'inline-flex', gap: 6 }}>
-          <button className="tool-btn" title="Отменить (Cmd/Ctrl+Z)" onClick={() => { void undo(); }}>↶ Отменить</button>
-          <button className="tool-btn" title="Вернуть (Shift+Cmd/Ctrl+Z / Ctrl+Y)" onClick={() => { void redo(); }}>↷ Вернуть</button>
-          <button className="tool-btn" title="Полноэкранный режим" onClick={() => {
-            if (!document.fullscreenElement) {
-              void document.documentElement.requestFullscreen();
-            } else {
-              void document.exitFullscreen();
-            }
-          }}>⛶ Полноэкранно</button>
-          <button className="tool-btn" title="Очистить всю базу" onClick={() => { if (confirm('Очистить все данные? Это действие необратимо.')) { void resetAll(); } }}>🗑 Очистить всё</button>
-          <span style={{ width: 8 }} />
-          <button className="tool-btn" title="Запомнить текущий центр вида" onClick={saveStartCenter}>📍</button>
-          <div ref={exportMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
-            <button className="tool-btn" title="Экспорт / Ещё" onClick={() => setExportMenuOpen((v) => !v)}>☰ Экспорт/Ещё</button>
-            {exportMenuOpen ? (
-              <div style={{ position: 'absolute', right: 0, top: '100%', background: '#222', color: '#fff', border: '1px solid #444', borderRadius: 6, padding: 8, minWidth: 220, zIndex: 1000, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}>
-                <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Экспортировать все данные" onClick={() => { log.info('export:click'); void exportBackup(); setExportMenuOpen(false); }}>⤓ Экспорт базы</button>
-                <button className="tool-btn" style={{ display: 'block', width: '100%', marginTop: 6 }} title="Экспортировать контекст ассистента" onClick={() => { log.info('export:assistant-context'); void exportAssistantContext(); setExportMenuOpen(false); }}>🧠 Контекст ассистента</button>
-              </div>
-            ) : null}
-          </div>
-          <div ref={importMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
-            <button className="tool-btn" title="Импорт / Ещё" onClick={() => setImportMenuOpen((v) => !v)}>☰ Импорт/Ещё</button>
-            {importMenuOpen ? (
-              <div style={{ position: 'absolute', right: 0, top: '100%', background: '#222', color: '#fff', border: '1px solid #444', borderRadius: 6, padding: 8, minWidth: 220, zIndex: 1000, boxShadow: '0 6px 24px rgba(0,0,0,0.35)' }}>
-                <button className="tool-btn" style={{ display: 'block', width: '100%' }} title="Импорт (замена)" onClick={() => { onPickFile('replace'); setImportMenuOpen(false); }}>⤒ Импорт (замена)</button>
-                <button className="tool-btn" style={{ display: 'block', width: '100%', marginTop: 6 }} title="Импорт (merge)" onClick={() => { onPickFile('merge'); setImportMenuOpen(false); }}>⤒ Импорт (merge)</button>
-              </div>
-            ) : null}
-          </div>
-          <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={onFileChange} />
-        </div>
+        <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={onFileChange} />
       </div>
       {assistantOpen ? (<AssistantModal open={assistantOpen} onClose={() => setAssistantOpen(false)} />) : null}
     </div>

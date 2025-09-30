@@ -15,6 +15,7 @@ import { PurchasesPage } from './pages/PurchasesPage';
 import AchievementsPage from './pages/AchievementsPage';
 import WellbeingManager from './components/WellbeingManager';
 import GamificationManager from './components/GamificationManager';
+import { DiaryPage } from './pages/DiaryPage';
 
 declare global {
   interface Window {
@@ -69,6 +70,7 @@ function App() {
         <Route path="/games" element={<GamesPage />} />
         <Route path="/purchases" element={<PurchasesPage />} />
         <Route path="/achievements" element={<AchievementsPage />} />
+        <Route path="/diary" element={<DiaryPage />} />
         <Route path="/diag" element={<DiagPage />} />
       </Routes>
     </>

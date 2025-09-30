@@ -6,6 +6,7 @@ const extras = [
   { to: '/movies', icon: '🎬', label: 'Фильмы' },
   { to: '/games', icon: '🎮', label: 'Игры' },
   { to: '/purchases', icon: '🛒', label: 'Покупки' },
+  { to: '/diary', icon: '📔', label: 'Дневник' },
   { to: '/achievements', icon: '🏅', label: 'Достижения' },
 ];
 

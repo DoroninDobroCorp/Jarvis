@@ -3,6 +3,7 @@ import type { AssistantMessage } from './storage';
 import { loadPrompt, loadSavedInfo } from './storage';
 import { buildNodeMap, formatTaskLine, isTaskNode, summarizeTask, type TaskPathInfo } from '../taskUtils';
 import type { AnyNode, TaskNode } from '../types';
+import { db } from '../db';
 
 export interface AssistantContextData {
   generatedAt: string;
@@ -67,12 +68,30 @@ export async function buildAssistantContext(options: {
   const history = (options.messages ?? []).slice(-24);
   const historyText = formatHistory(history);
 
+  // Получаем запись дневника за сегодня
+  const today = new Date().toISOString().split('T')[0];
+  let diaryText = '';
+  try {
+    const todayEntry = await db.diary.where('date').equals(today).first();
+    if (todayEntry && todayEntry.content) {
+      const moodText = todayEntry.mood ? ` [Настроение: ${todayEntry.mood}]` : '';
+      diaryText = `Дневник за сегодня${moodText}:\n${todayEntry.content}`;
+    }
+  } catch {
+    // Игнорируем ошибки доступа к БД
+  }
+
   const lines = summaries.map((info, idx) => `${idx + 1}. ${formatTaskLine(info)}`);
   const contextParts = [
     `Промпт ассистента:\n${prompt || 'не задан'}`,
     `Сохранённая информация пользователя:\n${savedInfo || 'не заполнено'}`,
     `Актуальные и актуализированные задачи (${summaries.length}):\n${lines.join('\n') || '— нет активных задач —'}`,
   ];
+  
+  if (diaryText) {
+    contextParts.push(diaryText);
+  }
+  
   if (historyText) {
     contextParts.push(`История диалога за сегодня (от свежих к ранним):\n${historyText}`);
   }

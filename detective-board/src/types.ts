@@ -133,6 +133,15 @@ export interface PurchaseItem {
   completedAt?: number;
 }
 
+export interface DiaryEntry {
+  id: string;
+  date: string; // YYYY-MM-DD format
+  content: string;
+  mood?: '😊' | '😐' | '😔' | '😡' | '😴' | '🎉' | '💭' | '✨';
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type Tool =
   | 'none'
   | 'link'
