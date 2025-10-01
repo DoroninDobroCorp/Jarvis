@@ -485,19 +485,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ historyPast: [...s.historyPast, { nodes: s0.nodes, links: s0.links, viewport: s0.viewport, currentParentId: s0.currentParentId }], historyFuture: [] }));
     const prev = get().nodes.find((n) => n.id === id);
     if (!prev) return;
-    log.debug('updateNode:before', { id, patch });
     const next = { ...prev, ...patch, updatedAt: now() } as AnyNode;
     await db.nodes.put(next);
     set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? next : n)) }));
-    log.debug('updateNode:after', { id });
   },
 
   moveNode: async (id, x, y) => {
-    const s0 = get();
-    set((s) => ({ historyPast: [...s.historyPast, { nodes: s0.nodes, links: s0.links, viewport: s0.viewport, currentParentId: s0.currentParentId }], historyFuture: [] }));
+    // ОПТИМИЗАЦИЯ: не сохраняем в history при каждом движении (только при dragEnd)
     const prev = get().nodes.find((n) => n.id === id);
     if (!prev) return;
-    log.debug('moveNode', { id, x, y });
     const next = { ...prev, x, y, updatedAt: now() } as AnyNode;
     await db.nodes.put(next);
     set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? next : n)) }));
@@ -656,27 +652,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setTool: (t) => {
-    log.debug('setTool', { tool: t });
     set({ tool: t });
   },
 
   setSelection: (ids) => {
-    log.debug('setSelection', { selection: ids });
     set({ selection: ids, linkSelection: [] });
   },
 
   setEditingNodeId: (id) => {
-    log.debug('setEditingNodeId', { id });
     set({ editingNodeId: id });
   },
 
   setLinkSelection: (ids) => {
-    log.debug('setLinkSelection', { ids });
     set({ linkSelection: ids, selection: [] });
   },
 
   setViewport: (vp) => {
-    log.debug('setViewport', { viewport: vp });
     const key = get().currentParentId ?? '__ROOT__';
     set((s) => ({ viewport: vp, levelView: { ...s.levelView, [key]: { x: vp.x, y: vp.y, scale: vp.scale } } }));
   },
@@ -688,13 +679,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   visibleNodes: () => {
     const parentId = get().currentParentId;
     const list = get().nodes.filter((n) => n.parentId === parentId);
-    log.debug('visibleNodes', { parentId, count: list.length });
     return list;
   },
 
   getNode: (id) => {
     const node = get().nodes.find((n) => n.id === id);
-    log.debug('getNode', { id, node });
     return node;
   },
 
@@ -713,7 +702,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       return false;
     };
     const result = rec(groupId, 0);
-    log.debug('groupHasActive', { groupId, result });
     return result;
   },
 }));

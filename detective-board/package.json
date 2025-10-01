@@ -10,6 +10,10 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed --project=chromium",
+    "test:perf": "playwright test tests/performance.spec.ts --project=chromium",
+    "test:perf:headed": "playwright test tests/performance.spec.ts --headed --project=chromium",
+    "test:prochee": "playwright test tests/prochee-drag.spec.ts --headed --project=chromium --timeout=60000",
+    "test:drag": "playwright test tests/simple-drag-test.spec.ts --headed --project=chromium",
     "pw:install": "playwright install",
     "check": "npm run lint && npm run test:e2e"
   },

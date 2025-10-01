@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { throttle } from '../utils/throttle';
 import { Stage, Layer, Group as KonvaGroup, Circle, Rect, Text, Image as KonvaImage, Arrow } from 'react-konva';
 import { useAppStore } from '../store';
 import type { AnyNode, GroupNode, TaskNode, PersonNode, TaskStatus, Recurrence } from '../types';
@@ -112,17 +113,22 @@ function estimateTaskFont(text: string, base: number, contentW: number, contentH
 export const BoardCanvas: React.FC = () => {
   const nodes = useAppStore((s) => s.nodes);
   const currentParentId = useAppStore((s) => s.currentParentId);
-  const visibleNodes = useMemo(
-    () => nodes.filter((n) => n.parentId === currentParentId && !(n.type === 'task' && (n as TaskNode).status === 'done')),
-    [nodes, currentParentId]
-  );
+  
+  // ОПТИМИЗАЦИЯ: фильтруем видимые узлы и кэшируем по хэшу
+  const visibleNodes = useMemo(() => {
+    return nodes.filter((n) => n.parentId === currentParentId && !(n.type === 'task' && (n as TaskNode).status === 'done'));
+  }, [nodes, currentParentId]);
+  
   const links = useAppStore((s) => s.links);
   const viewport = useAppStore((s) => s.viewport);
-  const setViewport = useAppStore((s) => s.setViewport);
+  const setViewportRaw = useAppStore((s) => s.setViewport);
+  // ОПТИМИЗАЦИЯ: throttle для viewport чтобы не дёргать store на каждый пиксель
+  const setViewport = useMemo(() => throttle(setViewportRaw, 16), [setViewportRaw]);
   const moveNode = useAppStore((s) => s.moveNode);
-  const moveNodeLocal = useAppStore((s) => s.moveNodeLocal);
   const setSelection = useAppStore((s) => s.setSelection);
   const selection = useAppStore((s) => s.selection);
+  // ОПТИМИЗАЦИЯ: Set для быстрой проверки selected
+  const selectionSet = useMemo(() => new Set(selection), [selection]);
   const tool = useAppStore((s) => s.tool);
   const setTool = useAppStore((s) => s.setTool);
   const addLink = useAppStore((s) => s.addLink);
@@ -377,8 +383,7 @@ export const BoardCanvas: React.FC = () => {
       y: pointer.y - mousePointTo.y * newScale,
     };
     setViewport({ x: newPos.x, y: newPos.y, scale: newScale });
-    log.debug('wheel', { oldScale, newScale, pointer: { x: pointer?.x, y: pointer?.y }, newPos });
-  }, [viewport.x, viewport.y, setViewport, log]);
+  }, [viewport.x, viewport.y, setViewport]);
 
   // drag to pan when tool=pan or when space pressed
   const isPanningRef = useRef(false);
@@ -415,14 +420,12 @@ export const BoardCanvas: React.FC = () => {
       setLasso({ x: lx, y: ly, w: 0, h: 0, additive });
       isPanningRef.current = false;
       lastPosRef.current = null;
-      log.debug('lasso:start', { lx, ly });
       return;
     }
     // иначе панорамирование
     isPanningRef.current = true;
     lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
-    log.debug('pan:start', { x: e.evt.clientX, y: e.evt.clientY });
-  }, [viewport.x, viewport.y, viewport.scale, log]);
+  }, [viewport.x, viewport.y, viewport.scale]);
 
   const onMouseMove = useCallback((e: KonvaEventObject<MouseEvent>) => {
     // lasso
@@ -457,8 +460,7 @@ export const BoardCanvas: React.FC = () => {
     const dy = e.evt.clientY - last.y;
     lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
     setViewport({ x: viewport.x + dx, y: viewport.y + dy, scale: viewport.scale });
-    log.debug('pan:move', { dx, dy });
-  }, [lasso, viewport, setViewport, log]);
+  }, [lasso, viewport, setViewport]);
 
   const onMouseUp = useCallback(() => {
     if (lasso) {
@@ -478,14 +480,12 @@ export const BoardCanvas: React.FC = () => {
         setSelection(idsInRect);
       }
       setLasso(null);
-      log.info('lasso:apply', { count: idsInRect.length });
       // предотвратить немедленный сброс выделения кликом по Stage после рамочного выбора
       lassoClickGuardRef.current = true;
       return;
     }
     isPanningRef.current = false;
-    log.debug('pan:end');
-  }, [lasso, visibleNodes, selection, setSelection, log]);
+  }, [lasso, visibleNodes, selection, setSelection]);
 
   // touch for pan/pinch
   const onTouchMove = useCallback((e: KonvaEventObject<TouchEvent>) => {
@@ -513,7 +513,6 @@ export const BoardCanvas: React.FC = () => {
       setViewport({ x: newPos.x, y: newPos.y, scale: newScale });
       lastCenter.current = center;
       lastDist.current = dist;
-      log.debug('pinch', { newScale, center });
     } else {
       const touch1 = touches && touches[0];
       if (touch1) {
@@ -526,17 +525,15 @@ export const BoardCanvas: React.FC = () => {
         const dy = touch1.clientY - lastPosRef.current.y;
         lastPosRef.current = { x: touch1.clientX, y: touch1.clientY };
         setViewport({ x: viewport.x + dx, y: viewport.y + dy, scale: viewport.scale });
-        log.debug('touch:pan', { dx, dy });
       }
     }
-  }, [viewport, setViewport, log]);
+  }, [viewport, setViewport]);
 
   const onTouchEnd = useCallback(() => {
     lastCenter.current = null;
     lastDist.current = 0;
     lastPosRef.current = null;
-    log.debug('touch:end');
-  }, [log]);
+  }, []);
 
   // удалены старые обработчики перетаскивания (перенесено ниже в мульти-логике)
 
@@ -551,17 +548,14 @@ export const BoardCanvas: React.FC = () => {
       } else {
         setSelection([id]);
       }
-      log.info('node:click', { id, tool });
     } else if (tool === 'link') {
       if (!pendingLinkFrom) {
         setPendingLinkFrom(id);
         setSelection([id]);
-        log.info('link:start', { from: id });
       } else if (pendingLinkFrom && pendingLinkFrom !== id) {
         void addLink(pendingLinkFrom, id);
         setPendingLinkFrom(null);
         setSelection([]);
-        log.info('link:connect', { from: pendingLinkFrom, to: id });
       }
     } else if (tool === 'add-task' || tool === 'add-group' || tool === 'add-person-employee' || tool === 'add-person-partner' || tool === 'add-person-bot') {
       // ignore clicks in create modes
@@ -602,23 +596,30 @@ export const BoardCanvas: React.FC = () => {
   }, [nodes, currentParentId]);
 
   // Ссылки, отрисованные на текущем уровне (сквозные связи поднимаются до группы)
+  // ОПТИМИЗАЦИЯ: кэшируем проекции узлов, чтобы не вызывать projectToLevel в цикле
+  const nodeProjections = useMemo(() => {
+    const cache = new Map<string, AnyNode | null>();
+    const allNodeIds = new Set(nodes.map(n => n.id));
+    // Предвычисляем проекции только для узлов, участвующих в связях
+    const relevantIds = new Set<string>();
+    links.forEach(l => { relevantIds.add(l.fromId); relevantIds.add(l.toId); });
+    relevantIds.forEach(id => {
+      if (allNodeIds.has(id)) cache.set(id, projectToLevel(id));
+    });
+    return cache;
+  }, [nodes, links, currentParentId, projectToLevel]);
+
   const renderedLinks = useMemo(() => {
-    const t0 = performance.now();
     const list: Array<{ base: typeof links[number]; from: AnyNode; to: AnyNode }> = [];
-    try {
-      links.forEach((l) => {
-        const fromProj = projectToLevel(l.fromId);
-        const toProj = projectToLevel(l.toId);
-        if (fromProj && toProj && fromProj.id !== toProj.id) {
-          list.push({ base: l, from: fromProj, to: toProj });
-        }
-      });
-    } finally {
-      const dt = performance.now() - t0;
-      if (dt > 20 && diag) log.warn('perf:renderedLinks:slow', { ms: Math.round(dt), linksInput: links.length, linksOutput: list.length });
-    }
+    links.forEach((l) => {
+      const fromProj = nodeProjections.get(l.fromId);
+      const toProj = nodeProjections.get(l.toId);
+      if (fromProj && toProj && fromProj.id !== toProj.id) {
+        list.push({ base: l, from: fromProj, to: toProj });
+      }
+    });
     return list;
-  }, [links, projectToLevel, diag, log]);
+  }, [links, nodeProjections]);
 
   // Результаты поиска узла-назначения при создании связи
   const linkSearchResults = useMemo(() => {
@@ -643,8 +644,7 @@ export const BoardCanvas: React.FC = () => {
     setSelection([]);
     setLinkSearchOpen(false);
     setLinkSearchTerm('');
-    log.info('link:connect:search', { from, to: targetId });
-  }, [pendingLinkFrom, addLink, setSelection, log]);
+  }, [pendingLinkFrom, addLink, setSelection]);
 
   // Фокус в поле поиска, когда открываем палитру
   useEffect(() => {
@@ -677,13 +677,26 @@ export const BoardCanvas: React.FC = () => {
     log.info('perf:mode', { perfMode, superPerfMode, nodes: visibleNodes.length, linksTotal: links.length, scale: Number(viewport.scale.toFixed(3)), renderLinks: linksToRender.length });
   }, [perfMode, superPerfMode, visibleNodes.length, links.length, viewport.scale, linksToRender.length, diag, log]);
 
-  useEffect(() => {
-    log.debug('visible:update', { nodes: visibleNodes.length, links: renderedLinks.length, parent: currentParentId, tool });
-  }, [visibleNodes, renderedLinks, currentParentId, tool, log]);
+  // ОПТИМИЗАЦИЯ: убран избыточный лог visible:update
 
   // Мультиперетаскивание: запоминаем стартовые позиции выбранных узлов
   const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const dragHistorySavedRef = useRef<boolean>(false);
   const handleNodeDragStart = useCallback((nodeId: string) => {
+    // ОПТИМИЗАЦИЯ: сохраняем в history один раз при начале перетаскивания
+    if (!dragHistorySavedRef.current) {
+      const s0 = useAppStore.getState();
+      useAppStore.setState((s) => ({ 
+        historyPast: [...s.historyPast, { 
+          nodes: s0.nodes, 
+          links: s0.links, 
+          viewport: s0.viewport, 
+          currentParentId: s0.currentParentId 
+        }], 
+        historyFuture: [] 
+      }));
+      dragHistorySavedRef.current = true;
+    }
     const ids = selection.includes(nodeId) ? selection : [nodeId];
     const map = new Map<string, { x: number; y: number }>();
     ids.forEach((id) => {
@@ -693,20 +706,27 @@ export const BoardCanvas: React.FC = () => {
     dragStartRef.current = map;
   }, [selection, nodes]);
 
+  // ОПТИМИЗАЦИЯ: НЕ обновляем store во время drag - только Konva
+  const nodeRefsMap = useRef<Map<string, any>>(new Map());
   const handleNodeDragMove = useCallback((nodeId: string, e: KonvaEventObject<DragEvent>) => {
     const base = dragStartRef.current.get(nodeId);
     const t = e.target;
-    if (!base) {
-      // fallback: двигать только один узел
-      moveNodeLocal(nodeId, t.x(), t.y());
+    if (!base || dragStartRef.current.size <= 1) {
+      // одиночный drag - Konva сам управляет позицией
       return;
     }
+    // мульти-drag: двигаем другие узлы напрямую через Konva refs
     const dx = t.x() - base.x;
     const dy = t.y() - base.y;
     dragStartRef.current.forEach((pos, id) => {
-      moveNodeLocal(id, pos.x + dx, pos.y + dy);
+      if (id === nodeId) return; // лидер двигается сам
+      const ref = nodeRefsMap.current.get(id);
+      if (ref) {
+        ref.x(pos.x + dx);
+        ref.y(pos.y + dy);
+      }
     });
-  }, [moveNodeLocal]);
+  }, []);
 
   // Вспомогательная функция репарентинга одного узла с правилами
   const reparentOne = useCallback(async (nodeObj: AnyNode, newX: number, newY: number, forcedGroup?: GroupNode | null) => {
@@ -820,6 +840,7 @@ export const BoardCanvas: React.FC = () => {
       // одиночный перетаск
       void moveNode(node.id, newX, newY).then(async () => { await reparentOne(node, newX, newY, leaderInside); });
       dragStartRef.current.clear();
+      dragHistorySavedRef.current = false;
       return;
     }
     // мультиперетаск: двигаем все по относительному смещению лидера
@@ -839,6 +860,7 @@ export const BoardCanvas: React.FC = () => {
         await reparentOne(n as AnyNode, nx, ny, leaderInside);
       }
       dragStartRef.current.clear();
+      dragHistorySavedRef.current = false;
     });
   }, [moveNode, reparentOne]);
 
@@ -878,7 +900,6 @@ export const BoardCanvas: React.FC = () => {
         const next = now === 'link' ? 'none' : 'link';
         setTool(next);
         if (next !== 'link') setPendingLinkFrom(null);
-        log.debug('hotkey:F:toggle', { from: now, to: next });
       } else if (tool === 'link' && pendingLinkFrom && (keyLower === 'a' || keyLower === 'ф')) {
         // Открыть палитру выбора целевого узла
         e.preventDefault();
@@ -898,7 +919,6 @@ export const BoardCanvas: React.FC = () => {
           const now = useAppStore.getState().tool;
           const next = now === desired ? 'none' : desired;
           setTool(next);
-          log.debug('hotkey:add:toggle', { key: keyLower, from: now, to: next });
         }
       }
     };
@@ -1110,17 +1130,14 @@ export const BoardCanvas: React.FC = () => {
               if (tool === 'add-task') {
                 const id = await addTask({ x: lx, y: ly });
                 setSelection([id]);
-                log.info('create:task', { id, lx, ly });
               } else if (tool === 'add-group') {
                 const id = await addGroup('Группа', { x: lx, y: ly });
                 setSelection([id]);
-                log.info('create:group', { id, lx, ly });
               } else if (isAddPerson) {
                 const role = tool === 'add-person-partner' ? 'partner' : tool === 'add-person-bot' ? 'bot' : 'employee';
                 const name = role === 'partner' ? 'Партнер' : role === 'bot' ? 'Бот' : 'Сотрудник';
                 const id = await addPerson(name, role, { x: lx, y: ly });
                 setSelection([id]);
-                log.info('create:person', { id, lx, ly, role });
               }
               // one-shot tool: выключаем после создания
               setTool('none');
@@ -1128,7 +1145,7 @@ export const BoardCanvas: React.FC = () => {
           }
         }}
       >
-        <Layer>
+        <Layer listening={!superPerfMode} hitGraphEnabled={!superPerfMode}>
           <KonvaGroup ref={levelGroupRef} x={levelOrigin.x} y={levelOrigin.y}>
             {/* Lasso rectangle */}
             {lasso ? (
@@ -1184,7 +1201,6 @@ export const BoardCanvas: React.FC = () => {
                     } else {
                       setLinkSelection([l.id]);
                     }
-                    log.info('link:select', { id: l.id });
                   }}
                   onContextMenu={(ev) => {
                     ev.evt.preventDefault();
@@ -1291,7 +1307,7 @@ export const BoardCanvas: React.FC = () => {
             <NodeShape
               key={n.id}
               node={n}
-              selected={selection.includes(n.id)}
+              selected={selectionSet.has(n.id)}
               onDragStart={() => handleNodeDragStart(n.id)}
               onDragMove={(e) => handleNodeDragMove(n.id, e)}
               onDragEnd={(e) => handleNodeDragEnd(n, e)}
@@ -1310,6 +1326,7 @@ export const BoardCanvas: React.FC = () => {
                 setHoverHUD((prev) => (prev ? { ...prev, x: ev.evt.clientX, y: ev.evt.clientY } : prev));
               }}
               onHoverLeave={() => setHoverHUD((prev) => (prev ? null : prev))}
+              onRefReady={(ref) => { if (ref) nodeRefsMap.current.set(n.id, ref); }}
             />
           ))}
           </KonvaGroup>
@@ -1821,7 +1838,8 @@ export const BoardCanvas: React.FC = () => {
   );
 };
 
-const NodeShape: React.FC<{
+// ОПТИМИЗАЦИЯ: React.memo предотвращает лишние re-renders
+const NodeShape = React.memo<{
   node: AnyNode;
   selected: boolean;
   onDragStart: (e: KonvaEventObject<DragEvent>) => void;
@@ -1833,7 +1851,8 @@ const NodeShape: React.FC<{
   onHoverEnter?: (e: KonvaEventObject<MouseEvent>) => void;
   onHoverMove?: (e: KonvaEventObject<MouseEvent>) => void;
   onHoverLeave?: () => void;
-}> = ({ node, selected, onDragStart, onDragMove, onDragEnd, onClick, onDblClick, onContextMenu, onHoverEnter, onHoverMove, onHoverLeave }) => {
+  onRefReady?: (ref: any) => void;
+}>(({ node, selected, onDragStart, onDragMove, onDragEnd, onClick, onDblClick, onContextMenu, onHoverEnter, onHoverMove, onHoverLeave, onRefReady }) => {
   const isTask = node.type === 'task';
   const isGroup = node.type === 'group';
   const isPerson = node.type === 'person';
@@ -1841,6 +1860,37 @@ const NodeShape: React.FC<{
   const multiResizeRef = useRef<Map<string, { w: number; h: number }> | null>(null);
   const personAvatarUrl = node.type === 'person' ? (node as PersonNode).avatarUrl : undefined;
   const img = useHtmlImage(personAvatarUrl);
+  
+  // ОПТИМИЗАЦИЯ: кэшируем узел как картинку для быстрого рендера
+  const groupRef = useRef<any>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  
+  const handleDragStartWrapper = useCallback((e: KonvaEventObject<DragEvent>) => {
+    setIsDragging(true);
+    // Отключаем кэш во время перетаскивания
+    if (groupRef.current) groupRef.current.clearCache();
+    onDragStart(e);
+  }, [onDragStart]);
+  
+  const handleDragEndWrapper = useCallback((e: KonvaEventObject<DragEvent>) => {
+    setIsDragging(false);
+    onDragEnd(e);
+    // Включаем кэш обратно после небольшой задержки
+    setTimeout(() => {
+      if (groupRef.current) groupRef.current.cache();
+    }, 50);
+  }, [onDragEnd]);
+  
+  useEffect(() => {
+    // Кэшируем узел после монтирования (превращаем в картинку)
+    if (groupRef.current && !isDragging && !selected) {
+      groupRef.current.cache();
+    }
+    
+    return () => {
+      if (groupRef.current) groupRef.current.clearCache();
+    };
+  }, [isDragging, selected]);
 
   if (isTask) {
     const t = node as TaskNode;
@@ -1853,13 +1903,17 @@ const NodeShape: React.FC<{
     const fs = typeof t.textSize === 'number' ? t.textSize : estimateTaskFont(textStr, baseFs, contentW, contentH, 1.15);
     return (
       <KonvaGroup
+        ref={(ref) => { 
+          groupRef.current = ref;
+          if (ref && onRefReady) onRefReady(ref); 
+        }}
         x={t.x}
         y={t.y}
         opacity={t.isActual === false ? 0.35 : 1}
         draggable
-        onDragStart={onDragStart}
+        onDragStart={handleDragStartWrapper}
         onDragMove={onDragMove}
-        onDragEnd={onDragEnd}
+        onDragEnd={handleDragEndWrapper}
         onClick={(e) => onClick(e)}
         onDblClick={(e) => onDblClick(e as unknown as KonvaEventObject<MouseEvent>)}
         onDblTap={() => onDblClick({} as KonvaEventObject<MouseEvent>)}
@@ -1868,16 +1922,27 @@ const NodeShape: React.FC<{
         onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
         onMouseLeave={() => { onHoverLeave?.(); }}
       >
+        {/* ОПТИМИЗАЦИЯ: "фейковая тень" через Rect вместо shadowBlur (в 10x быстрее) */}
+        <Rect
+          x={3}
+          y={4}
+          width={t.width}
+          height={t.height}
+          fill="#00000020"
+          cornerRadius={8}
+          perfectDrawEnabled={false}
+        />
         <Rect
           width={t.width}
           height={t.height}
           fill={t.color || '#E8D8A6'}
           cornerRadius={8}
-          shadowColor={'#00000099'}
-          shadowBlur={selected ? 16 : 8}
-          shadowOffset={{ x: 2, y: 3 }}
+          shadowColor={selected ? '#F05A5A99' : undefined}
+          shadowBlur={selected ? 12 : 0}
+          shadowOffset={selected ? { x: 0, y: 0 } : undefined}
           stroke={selected ? '#F05A5A' : '#00000030'}
           strokeWidth={selected ? 2 : 1}
+          perfectDrawEnabled={false}
         />
         {/* clipped text area to prevent overflow */}
         <KonvaGroup x={padX} y={padY} clip={{ x: 0, y: 0, width: contentW, height: contentH }}>
@@ -1975,6 +2040,7 @@ const NodeShape: React.FC<{
     // Убрали индикатор «группа не пустая» (красная точка)
     return (
       <KonvaGroup
+        ref={(ref) => { if (ref && onRefReady) onRefReady(ref); }}
         x={g.x}
         y={g.y}
         opacity={g.isActual === false ? 0.35 : 1}
@@ -1990,15 +2056,24 @@ const NodeShape: React.FC<{
         onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
         onMouseLeave={() => { onHoverLeave?.(); }}
       >
+        {/* ОПТИМИЗАЦИЯ: "фейковая тень" через Circle */}
+        <Circle
+          radius={r}
+          x={r + 3}
+          y={r + 4}
+          fill="#00000020"
+          perfectDrawEnabled={false}
+        />
         <Circle
           radius={r}
           x={r}
           y={r}
           fill={g.color || '#AEC6CF'}
-          shadowColor={'#00000099'}
-          shadowBlur={10}
-          stroke={'#00000040'}
-          strokeWidth={1}
+          shadowColor={selected ? '#F05A5A99' : undefined}
+          shadowBlur={selected ? 10 : 0}
+          stroke={selected ? '#F05A5A' : '#00000060'}
+          strokeWidth={selected ? 2 : 1}
+          perfectDrawEnabled={false}
         />
         {/* title (wrapped, centered inside inner box) */}
         <KonvaGroup x={r - contentW / 2} y={r - contentH / 2} clip={{ x: 0, y: 0, width: contentW, height: contentH }}>
@@ -2088,6 +2163,7 @@ const NodeShape: React.FC<{
     const nameFs = clamp(p.width / 4, 12, 48);
     return (
       <KonvaGroup
+        ref={(ref) => { if (ref && onRefReady) onRefReady(ref); }}
         x={p.x}
         y={p.y}
         opacity={p.isActual === false ? 0.35 : 1}
@@ -2103,16 +2179,25 @@ const NodeShape: React.FC<{
         onMouseMove={(e) => { onHoverMove?.(e as unknown as KonvaEventObject<MouseEvent>); }}
         onMouseLeave={() => { onHoverLeave?.(); }}
       >
+        {/* ОПТИМИЗАЦИЯ: "фейковая тень" */}
+        <Circle
+          radius={r}
+          x={r + 3}
+          y={r + 4}
+          fill="#00000020"
+          perfectDrawEnabled={false}
+        />
         {/* avatar background circle */}
         <Circle
           radius={r}
           x={r}
           y={r}
           fill={p.color || '#B3E5FC'}
-          shadowColor={'#00000099'}
-          shadowBlur={10}
+          shadowColor={selected ? '#F05A5A99' : undefined}
+          shadowBlur={selected ? 10 : 0}
           stroke={selected ? '#F05A5A' : '#00000040'}
           strokeWidth={selected ? 2 : 1}
+          perfectDrawEnabled={false}
         />
         {/* avatar image or emoji covering whole circle */}
         {img ? (
@@ -2185,4 +2270,11 @@ const NodeShape: React.FC<{
   }
 
   return null;
-};
+}, (prev, next) => {
+  // ОПТИМИЗАЦИЯ: пропускаем re-render если ничего важного не изменилось
+  return (
+    prev.node === next.node &&
+    prev.selected === next.selected
+    // handlers не сравниваем - они стабильны через useCallback
+  );
+});

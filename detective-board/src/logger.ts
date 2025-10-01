@@ -31,29 +31,17 @@ function getGlobalLevel(): LogLevel {
     const lvl = (typeof maybe === 'string' ? maybe : undefined) || fromStorage || undefined;
     if (lvl && ['debug', 'info', 'warn', 'error'].includes(lvl)) return lvl as LogLevel;
   }
-  return 'debug';
+  // ОПТИМИЗАЦИЯ: по умолчанию warn вместо debug для меньшего объёма логов
+  return 'warn';
 }
 
 export function getLogger(scope: string) {
   const base = `[${scope}]`;
   const level = getGlobalLevel();
   const min = LEVELS[level];
-  let mirror = false;
-  try { mirror = typeof window !== 'undefined' && localStorage.getItem('DEBUG_DIAG') === '1'; } catch { mirror = false; }
-  const mirrorSend = (lvl: LogLevel, parts: unknown[]) => {
-    if (!mirror) return;
-    try {
-      const payload = { scope, lvl, ts: Date.now(), parts };
-      const body = JSON.stringify(payload);
-      if (navigator && 'sendBeacon' in navigator) {
-        (navigator as Navigator).sendBeacon('/__log', new Blob([body], { type: 'application/json' }));
-      } else {
-        // Fire-and-forget in dev
-        void fetch('/__log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true, mode: 'no-cors' as RequestMode });
-      }
-    } catch {
-      // ignore
-    }
+  // ОПТИМИЗАЦИЯ: отключаем mirror логов для экономии ресурсов
+  const mirrorSend = (_lvl: LogLevel, _parts: unknown[]) => {
+    // Отключено для производительности
   };
   const format = (args: unknown[]) => {
     try {

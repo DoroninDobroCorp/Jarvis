@@ -19,14 +19,6 @@ export const InspectorPanel: React.FC = () => {
     return getNode(selection[0]);
   }, [selection, getNode]);
 
-  useEffect(() => {
-    if (!node) {
-      log.debug('selection:none');
-    } else {
-      log.debug('selection:node', { id: node.id, type: node.type });
-    }
-  }, [node, log]);
-
   // Синхронизация локального состояния даты со стором при смене выделения/даты
   useEffect(() => {
     if (node && node.type === 'task') {

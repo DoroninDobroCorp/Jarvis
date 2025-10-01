@@ -148,6 +148,7 @@ try {
 } catch { /* ignore */ }
 
 // Fire-and-forget: глобальный бэкфилл обложек для уже существующих элементов
+// ОПТИМИЗАЦИЯ: отложен запуск на 5 секунд, чтобы не блокировать начальный рендеринг
 try {
   setTimeout(() => {
     (async () => {
@@ -207,7 +208,7 @@ try {
         log.warn('coverBackfill:failed', { error: String(e instanceof Error ? e.message : e) });
       }
     })();
-  }, 0);
+  }, 5000);
 } catch (e) {
   log.warn('coverBackfill:init_failed', { error: String(e instanceof Error ? e.message : e) });
 }
