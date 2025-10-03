@@ -9,15 +9,10 @@ import { BrowserRouter } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { getLogger } from './logger';
 import { db } from './db';
+import { isCoverUrlInvalid } from './utils/coverUtils';
 
 const log = getLogger('main');
 
-declare global {
-  interface Window {
-    __coverAudit?: typeof auditAndFixAllCovers;
-    __coverBackfill?: typeof runCoverBackfill;
-  }
-}
 try {
   // Force sane defaults on each load to avoid old noisy settings
   const url = new URL(window.location.href);
@@ -164,22 +159,10 @@ try {
           forceAudit = sp.get('audit') === '1';
         } catch { /* ignore */ }
         const [booksMissing, moviesMissing, gamesMissing, purchasesMissing] = await Promise.all([
-          db.books.filter((b) => {
-            const url = typeof b.coverUrl === 'string' ? b.coverUrl.trim() : '';
-            return !url || url.startsWith('data:');
-          }).count(),
-          db.movies.filter((m) => {
-            const url = typeof m.coverUrl === 'string' ? m.coverUrl.trim() : '';
-            return !url || url.startsWith('data:');
-          }).count(),
-          db.games.filter((g) => {
-            const url = typeof g.coverUrl === 'string' ? g.coverUrl.trim() : '';
-            return !url || url.startsWith('data:');
-          }).count(),
-          db.purchases.filter((p) => {
-            const url = typeof p.coverUrl === 'string' ? p.coverUrl.trim() : '';
-            return !url || url.startsWith('data:');
-          }).count(),
+          db.books.filter((b) => isCoverUrlInvalid(b.coverUrl)).count(),
+          db.movies.filter((m) => isCoverUrlInvalid(m.coverUrl)).count(),
+          db.games.filter((g) => isCoverUrlInvalid(g.coverUrl)).count(),
+          db.purchases.filter((p) => isCoverUrlInvalid(p.coverUrl)).count(),
         ]);
         const totalMissing = booksMissing + moviesMissing + gamesMissing + purchasesMissing;
         const stale = Date.now() - last >= twelveHours;

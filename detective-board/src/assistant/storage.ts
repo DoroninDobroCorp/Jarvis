@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 
 export const SAVED_INFO_KEY = 'ASSISTANT_SAVED_INFO_V1';
 export const PROMPT_KEY = 'ASSISTANT_PROMPT_V1';
@@ -113,7 +112,7 @@ export function resetMessages(dateKey = todayKey()): void {
 }
 
 export function appendMessage(list: AssistantMessage[], role: AssistantRole, text: string): AssistantMessage[] {
-  const entry: AssistantMessage = { id: uuidv4(), role, text, ts: Date.now() };
+  const entry: AssistantMessage = { id: crypto.randomUUID(), role, text, ts: Date.now() };
   return [...list, entry];
 }
 

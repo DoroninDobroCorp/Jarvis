@@ -16,6 +16,10 @@ dist-ssr
 # Test results
 test-results
 playwright-report
+coverage
+
+# Husky
+.husky/_
 
 # Editor directories and files
 .vscode/*

@@ -3,6 +3,10 @@
  * Группирует несколько вызовов в один кадр анимации
  */
 
+import { getLogger } from '../logger';
+
+const log = getLogger('raf-batch');
+
 let rafId: number | null = null;
 let pendingCallbacks: Set<() => void> = new Set();
 
@@ -19,7 +23,7 @@ export function scheduleRAF(callback: () => void): void {
         try {
           cb();
         } catch (e) {
-          console.error('RAF callback error:', e);
+          log.error('raf:callback-error', { error: e instanceof Error ? e.message : String(e) });
         }
       });
     });

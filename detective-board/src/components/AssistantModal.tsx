@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import { getLogger } from '../logger';
 import {
   appendMessage,
@@ -93,7 +92,7 @@ export const AssistantModal: React.FC<{ open: boolean; onClose: () => void }> = 
     (text: string, kind: StatusEntry['kind'] = 'info') => {
       setStatus(text);
       setStatusMessages((prev) => {
-        const entry: StatusEntry = { id: uuidv4(), text, kind, ts: Date.now() };
+        const entry: StatusEntry = { id: crypto.randomUUID(), text, kind, ts: Date.now() };
         return [...prev.slice(-8), entry];
       });
     },

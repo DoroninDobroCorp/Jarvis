@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
-import { v4 as uuidv4 } from 'uuid';
 import type { TaskPathInfo } from './taskUtils';
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
@@ -186,7 +185,7 @@ export const useGamificationStore = create<GamificationState>()(
           if (applied === 0) return {};
           const nextXp = state.xp + applied;
           const history: XPEntry[] = [...state.xpHistory, {
-            id: uuidv4(),
+            id: crypto.randomUUID(),
             amount: applied,
             source,
             note,
@@ -233,7 +232,7 @@ export const useGamificationStore = create<GamificationState>()(
       },
       addAchievement: ({ title, description, xpReward, imageUrl }) => {
         const achievement: Achievement = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           title,
           description,
           xpReward: Math.max(0, normalizeXp(xpReward)),
@@ -300,7 +299,7 @@ export const useGamificationStore = create<GamificationState>()(
             : `Бонус за ${dateKey}`;
           const entryTs = Date.parse(`${dateKey}T12:00:00Z`);
           const history: XPEntry[] = [...state.xpHistory, {
-            id: uuidv4(),
+            id: crypto.randomUUID(),
             amount: applied,
             source: 'bonus' as XpSource,
             note: appliedNote,

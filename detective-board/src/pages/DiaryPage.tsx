@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../db';
 import type { DiaryEntry } from '../types';
-import { v4 as uuid } from 'uuid';
 
 const MOODS = [
   { emoji: '😊', label: 'Счастлив' },
@@ -54,7 +53,7 @@ export const DiaryPage: React.FC = () => {
       // Create new
       const newEntry: DiaryEntry = {
         ...currentEntry,
-        id: uuid(),
+        id: crypto.randomUUID(),
         date: selectedDate,
         createdAt: now,
         updatedAt: now,

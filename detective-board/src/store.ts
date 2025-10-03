@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { db } from './db';
 import type { AnyNode, GroupNode, LinkThread, TaskNode, Tool, TaskStatus, PersonNode, PersonRole } from './types';
-import { v4 as uuidv4 } from 'uuid';
 import { getLogger } from './logger';
 import { computeNextDueDate, toIsoUTCFromYMD } from './recurrence';
 
@@ -179,7 +178,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         // seed demo data
         log.warn('init:empty-db, seeding demo data');
         const rootTask1: TaskNode = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           type: 'task',
           parentId: null,
           x: 200,
@@ -195,7 +194,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           isActual: true,
         };
         const rootGroup: GroupNode = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           type: 'group',
           parentId: null,
           x: 520,
@@ -209,7 +208,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           isActual: true,
         };
         const innerTask: TaskNode = {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           type: 'task',
           parentId: rootGroup.id,
           x: 40,
@@ -235,7 +234,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Fallback to in-memory state (no persistence)
       log.error('init:indexeddb-failed, using in-memory state', err);
       const rootTask1: TaskNode = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         type: 'task',
         parentId: null,
         x: 200,
@@ -251,7 +250,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         isActual: true,
       };
       const rootGroup: GroupNode = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         type: 'group',
         parentId: null,
         x: 520,
@@ -265,7 +264,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         isActual: true,
       };
       const innerTask: TaskNode = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         type: 'task',
         parentId: rootGroup.id,
         x: 40,
@@ -297,7 +296,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   addPerson: async (name = 'Новый человек', role: PersonRole = 'employee', position) => {
     const s0 = get();
     set((s) => ({ historyPast: [...s.historyPast, { nodes: s0.nodes, links: s0.links, viewport: s0.viewport, currentParentId: s0.currentParentId }], historyFuture: [] }));
-    const id = uuidv4();
+    const id = crypto.randomUUID();
     const colorByRole: Record<PersonRole, string> = {
       employee: '#B3E5FC',
       partner: '#D1C4E9',
@@ -379,7 +378,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const gx = minX - pad;
     const gy = minY - pad;
 
-    const id = uuidv4();
+    const id = crypto.randomUUID();
     const group: GroupNode = {
       id,
       type: 'group',
@@ -426,7 +425,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // history
     const s0 = get();
     set((s) => ({ historyPast: [...s.historyPast, { nodes: s0.nodes, links: s0.links, viewport: s0.viewport, currentParentId: s0.currentParentId }], historyFuture: [] }));
-    const id = uuidv4();
+    const id = crypto.randomUUID();
     const node: TaskNode = {
       id,
       type: 'task',
@@ -459,7 +458,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   addGroup: async (name, position) => {
     const s0 = get();
     set((s) => ({ historyPast: [...s.historyPast, { nodes: s0.nodes, links: s0.links, viewport: s0.viewport, currentParentId: s0.currentParentId }], historyFuture: [] }));
-    const id = uuidv4();
+    const id = crypto.randomUUID();
     const node: GroupNode = {
       id,
       type: 'group',
@@ -539,7 +538,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       log.warn('addLink:duplicate-blocked', { fromId, toId });
       return '';
     }
-    const id = uuidv4();
+    const id = crypto.randomUUID();
     const link: LinkThread = { id, fromId, toId, color, dir: 'one' };
     await db.links.add(link);
     set((s) => ({ links: [...s.links, link] }));

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import type { BookItem, MovieItem, GameItem, PurchaseItem } from '../types';
 import { getLogger } from '../logger';
@@ -97,7 +96,7 @@ export const MediaCollectionPage: React.FC<MediaCollectionConfig> = ({
     if (!t) return;
     setLoading(true);
     try {
-      const id = uuidv4();
+      const id = crypto.randomUUID();
       const coverUrl = await resolveFunction(t);
       const item: MediaItem = { id, title: t, comment: comment.trim() || undefined, coverUrl, createdAt: Date.now(), status: 'active' };
       await db[tableName].add(item);
