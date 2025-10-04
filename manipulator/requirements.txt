@@ -1,0 +1,9 @@
+python-telegram-bot
+google-generativeai
+pyobjc-framework-Cocoa
+pyobjc-framework-Quartz
+pyautogui
+pillow
+pydub
+python-dotenv
+pyobjc-framework-ApplicationServices
