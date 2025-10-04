@@ -550,12 +550,19 @@ export const BoardCanvas: React.FC = () => {
       }
     } else if (tool === 'link') {
       if (!pendingLinkFrom) {
+        // Первый клик - запоминаем узел-источник
         setPendingLinkFrom(id);
         setSelection([id]);
-      } else if (pendingLinkFrom && pendingLinkFrom !== id) {
-        void addLink(pendingLinkFrom, id);
+      } else if (pendingLinkFrom === id) {
+        // Повторный клик на тот же узел - отменяем выбор
         setPendingLinkFrom(null);
         setSelection([]);
+      } else {
+        // Второй клик на другой узел - создаём связь
+        void addLink(pendingLinkFrom, id).then(() => {
+          setPendingLinkFrom(null);
+          setSelection([]);
+        });
       }
     } else if (tool === 'add-task' || tool === 'add-group' || tool === 'add-person-employee' || tool === 'add-person-partner' || tool === 'add-person-bot') {
       // ignore clicks in create modes

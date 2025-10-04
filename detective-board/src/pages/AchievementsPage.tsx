@@ -236,7 +236,23 @@ const AchievementsPage: React.FC = () => {
           </label>
           <label>
             Опыт за достижение
-            <input type="number" min={0} value={newXp} onChange={(e) => setNewXp(Number(e.target.value))} style={{ width: '100%', marginTop: 4 }} />
+            <input 
+              type="text" 
+              inputMode="numeric" 
+              value={newXp} 
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '' || val === '-') {
+                  setNewXp(0);
+                } else {
+                  const num = Number(val);
+                  if (!isNaN(num)) {
+                    setNewXp(num);
+                  }
+                }
+              }} 
+              style={{ width: '100%', marginTop: 4 }} 
+            />
           </label>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
             <button type="button" className="tool-btn" onClick={handleGeneratePreview} disabled={isGenerating}>

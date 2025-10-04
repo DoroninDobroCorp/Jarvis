@@ -126,6 +126,8 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
     pending.push(entry);
     log('info', 'rating captured', { chatId, awareness: entry.awareness, efficiency: entry.efficiency, joy: entry.joy });
     await sendMessage(chatId, `Записал: осознанность ${entry.awareness}, эффективность ${entry.efficiency}, удовольствие ${entry.joy}.`);
+    // Reschedule next question in 3 hours from now
+    scheduleNextQuestion(3 * 60 * 60 * 1000);
   };
 
   const parseAndStoreRatings = async (chatId: number, text: string, msgTs: number | undefined) => {
@@ -167,7 +169,7 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
     if (typeof message.text === 'string') {
       const text: string = message.text;
       if (text.startsWith('/start')) {
-        await sendMessage(chatId, 'Привет! Я буду периодически спрашивать про самочувствие. Ответь в формате 7/8/9 (осознанность/эффективность/удовольствие).');
+        await sendMessage(chatId, 'Привет! Я буду спрашивать про самочувствие каждые 3 часа после твоего отчета. Ответь в формате 7/8/9 (осознанность/эффективность/удовольствие).');
         return;
       }
       if (text.startsWith('/ping')) {
@@ -232,32 +234,10 @@ function createTelegramWellbeingService(options: TelegramServiceOptions): Telegr
     void pollUpdates();
   };
 
-  // Compute delay to the next fixed local-time slot (11:30, 14:30, 17:30, 20:30, 23:30)
-  const computeNextSlotDelayMs = (from: Date = new Date()): number => {
-    try {
-      const slots: Array<{ h: number; m: number }> = [
-        { h: 11, m: 30 },
-        { h: 14, m: 30 },
-        { h: 17, m: 30 },
-        { h: 20, m: 30 },
-        { h: 23, m: 30 },
-      ];
-      const y = from.getFullYear();
-      const mo = from.getMonth();
-      const d = from.getDate();
-      for (const s of slots) {
-        const cand = new Date(y, mo, d, s.h, s.m, 0, 0);
-        if (cand.getTime() > from.getTime()) {
-          return Math.max(1_000, cand.getTime() - from.getTime());
-        }
-      }
-      // If all slots passed today, schedule tomorrow at 11:30
-      const tomorrow = new Date(y, mo, d + 1, 11, 30, 0, 0);
-      return Math.max(1_000, tomorrow.getTime() - from.getTime());
-    } catch (e) {
-      // fallback to default delay on error
-      return Math.max(1_000, defaultDelayMs);
-    }
+  // Default: 3 hours from current time (dynamic intervals)
+  const computeNextSlotDelayMs = (_from: Date = new Date()): number => {
+    // Always return 3 hours (10,800,000 ms)
+    return 3 * 60 * 60 * 1000;
   };
 
   const scheduleNextQuestion = (delayMs?: number) => {

@@ -389,10 +389,20 @@ const GamificationManager: React.FC = () => {
             <label style={{ display: 'block', marginBottom: 10 }}>
               Очки опыта
               <input
-                type="number"
-                min={0}
+                type="text"
+                inputMode="numeric"
                 value={xpValue}
-                onChange={(e) => setXpValue(Number(e.target.value))}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '' || val === '-') {
+                    setXpValue(0);
+                  } else {
+                    const num = Number(val);
+                    if (!isNaN(num)) {
+                      setXpValue(num);
+                    }
+                  }
+                }}
                 style={{ width: '100%', marginTop: 4 }}
               />
             </label>
