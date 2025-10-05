@@ -122,4 +122,7 @@ def setup_global_logger():
         ]
     )
     
+    # Отключаем шумные логи от httpx (Telegram API запросы)
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    
     return logging.getLogger('jarvis')

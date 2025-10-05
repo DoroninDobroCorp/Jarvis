@@ -12,7 +12,8 @@ class CommandInterpreter:
     """
     def __init__(self):
         genai.configure(api_key=config.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        # ВАЖНО: ТОЛЬКО модели 2.5+ (быстрее и качественнее 2.0)
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
     
     async def understand_command(self, user_text: str) -> str:
         """

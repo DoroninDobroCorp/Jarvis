@@ -11,6 +11,9 @@
 ./venv/bin/python tests/quick_test.py
 ./venv/bin/python tests/test_parallel_work.py
 
+# Диагностика API (при проблемах)
+./venv/bin/python tests/test_gemini_api.py
+
 # Функциональные тесты (проверка реального выполнения)
 ./venv/bin/python tests/test_anime_playback.py
 ./venv/bin/python tests/test_spotify_playback.py
@@ -31,6 +34,11 @@
 **Базовые проверки:**
 - **`quick_test.py`** - Быстрая проверка базовых компонентов после изменений
 - **`test_parallel_work.py`** - Проверка параллельной работы, детектора активности, уведомлений
+
+**Диагностика:**
+- **`test_gemini_api.py`** - Диагностика Gemini API при проблемах
+  - Проверка API ключа, подключения, доступных моделей
+  - Детальная диагностика ошибок с решениями
 
 **Функциональные тесты (с проверкой реального выполнения):**
 - **`test_anime_playback.py`** - Универсальный тест запуска видео на полный экран (YouTube/аниме)

@@ -1,0 +1,141 @@
+# Возможности системы для планирования задач
+# Этот файл используется Gemini для понимания что она может делать
+
+applications:
+  - Yandex
+  - Google Chrome
+  - Safari
+  - Telegram
+  - Zoom
+  - Slack
+  - Terminal
+  - Windsurf
+  - Sublime Text
+  - Visual Studio Code
+  - Spotify
+  - ChatGpt
+  - Finder
+  - Notes
+  - Calendar
+  - Mail
+  - TOTP
+  - AnyDesk
+  - CCleaner
+  - The Unarchiver
+  - Tor Browser
+
+actions:
+  - name: CLICK
+    description: "Кликнуть по UI элементу используя Vision для поиска координат"
+    params:
+      - element_description: "Описание элемента (например: 'кнопка Play', 'поле поиска')"
+    example: "CLICK('кнопка Play в центре экрана')"
+    
+  - name: TYPE
+    description: "Ввести текст в активное поле"
+    params:
+      - text: "Текст для ввода"
+    example: "TYPE('Название трека')"
+    
+  - name: TERMINAL
+    description: "Выполнить команду в терминале"
+    params:
+      - command: "Команда"
+      - cwd: "Рабочая директория (опционально)"
+    example: "TERMINAL('ls -la', '/Users/username')"
+    
+  - name: HOTKEY
+    description: "Нажать сочетание клавиш"
+    params:
+      - combo: "Комбинация (cmd+space, cmd+tab, etc.)"
+    example: "HOTKEY('cmd+f')"
+    
+  - name: WAIT
+    description: "Подождать N секунд (для загрузки страниц, анимаций)"
+    params:
+      - seconds: "Количество секунд (1-10)"
+    example: "WAIT(3)"
+    
+  - name: REPLAN
+    description: "Запросить новый план на основе текущего состояния экрана"
+    params:
+      - reason: "Почему нужен replan (опционально)"
+    example: "REPLAN('не вижу что отобразится в результатах поиска')"
+    note: "Используй когда не можешь точно предсказать что будет дальше"
+
+# Правила планирования (два уровня)
+planning_rules:
+  high_level:
+    - "Создавай общий план из любого количества шагов"
+    - "Описывай стратегию в понятных терминах"
+    - "План может меняться по ходу выполнения"
+  
+  low_level:
+    - "Планируй МАКСИМУМ 2-4 конкретных действия за раз"
+    - "Планируй ТОЛЬКО те действия в которых уверена на 90%+"
+    - "Если не знаешь что будет после действия - используй REPLAN СЕЙЧАС"
+    - "После выполнения действий - автоматический REPLAN для следующих шагов"
+    - "ПРИОРИТЕТ КОМАНДАМ: открытие приложений ВСЕГДА через TERMINAL, НЕ через клики"
+    - "TERMINAL лучше CLICK: если можешь сделать командой - делай командой (открытие приложений, горячие клавиши)"
+    - "CLICK только когда нет альтернативы: поиск в приложении, выбор треков, кнопки в интерфейсе"
+    - "Используй WAIT после действий которые вызывают загрузку (загрузка страницы, появление результатов)"
+    - "Для полей ввода с существующим текстом: CLICK на поле → HOTKEY('cmd+a') → TYPE нового текста"
+    - "Для пустых полей ввода: просто CLICK → TYPE"
+    - "REPLAN стоит использовать когда результат действия непредсказуем или зависит от контента"
+    - "Лучше делать replan чаще, чем планировать ненадежные шаги"
+
+# Иерархия приоритетов действий
+action_priority:
+  description: "Строгая иерархия выбора метода действия"
+  priority_order:
+    1:
+      method: "TERMINAL"
+      when: "Открытие приложений, системные команды, горячие клавиши"
+      examples:
+        - "open -a 'Application Name'"
+        - "killall 'Process Name'"
+        - "osascript -e 'tell application...'"
+    
+    2:
+      method: "ACCESSIBILITY_API"
+      when: "UI элементы доступны через macOS Accessibility API"
+      status: "not_implemented"
+      examples:
+        - "Чтение текста из элементов"
+        - "Активация кнопок по имени/роли"
+    
+    3:
+      method: "MCP_SERVERS"
+      when: "Интеграция с внешними сервисами через API"
+      status: "not_configured"
+      available_servers: []
+    
+    4:
+      method: "VISUAL_CLICK"
+      when: "ТОЛЬКО если все предыдущие методы невозможны"
+      implementation: "ruler_based_finder.py"
+      description: "Итеративный поиск координат с визуальным подтверждением"
+      examples:
+        - "Клик по кнопке в UI приложения"
+        - "Заполнение полей ввода"
+
+  rules:
+    - "ВСЕГДА проверяй возможность использования метода более высокого приоритета"
+    - "VISUAL_CLICK - последний resort, используй только когда нет альтернативы"
+    - "Для Terminal доступны: open, osascript, automator, горячие клавиши через cliclick"
+
+# MCP серверы (заготовка на будущее)
+mcp_servers:
+  available: []
+  # Примеры для будущего:
+  # - name: "github"
+  #   capabilities: ["repos", "issues", "pull_requests"]
+  # - name: "slack"
+  #   capabilities: ["messages", "channels"]
+
+# Ограничения
+limits:
+  max_replans: 15  # Максимум циклов replan
+  stuck_threshold: 2  # Если 2 раза подряд нет прогресса - останавливаемся
+  max_execution_time: 300  # Максимум 5 минут на задачу
+  max_steps_per_plan: 4  # Максимум шагов в одном плане

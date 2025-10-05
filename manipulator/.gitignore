@@ -1,12 +1,35 @@
-.env
-*.pyc
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.venv
 venv/
-.venv/
-*.log
-temp/
-screenshots/
-*.ogg
-*.mp3
-*.wav
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Project specific
+logs/
+screenshots/
+temp/
+
+# Keep test files but ignore test logs
+tests/__pycache__/

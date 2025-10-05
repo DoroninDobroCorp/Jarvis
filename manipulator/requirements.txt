@@ -7,3 +7,4 @@ pillow
 pydub
 python-dotenv
 pyobjc-framework-ApplicationServices
+pyyaml
