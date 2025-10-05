@@ -33,3 +33,7 @@ temp/
 
 # Keep test files but ignore test logs
 tests/__pycache__/
+
+# Node.js
+node_modules/
+package-lock.json

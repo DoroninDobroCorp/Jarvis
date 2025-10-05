@@ -18,6 +18,7 @@ import google.generativeai as genai
 from screen_manager import ScreenManager
 import subprocess
 import pyautogui
+from chrome_mcp_integration import get_chrome_mcp_integration, close_chrome_mcp_integration
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,8 @@ class IterativePlanner:
         self.action_tracker = ActionTracker()
         self.replan_count = 0
         self.max_replans = CAPABILITIES['limits']['max_replans']
+        self.chrome_mcp = None  # Lazy init при необходимости
+        self.is_browser_task = False  # Флаг для определения типа задачи
         
     async def _ensure_app_is_active(self, params: Dict):
         """
@@ -259,18 +262,49 @@ element_description - это описание ВНЕШНЕГО ВИДА UI эл�
   1. CLICK("поле адреса")
   2. TYPE("youtube.com")  ← получится "about:blankyoutube.com"!
 
-## ⚡ ПРИОРИТЕТ КОМАНДАМ НАД КЛИКАМИ:
-- Открытие приложений → ВСЕГДА через TERMINAL, НЕ через CLICK!
-  ✅ TERMINAL('open -a "Spotify"')
-  ❌ CLICK('иконка Spotify в доке')
-- Горячие клавиши → HOTKEY лучше чем клики
-  ✅ HOTKEY('cmd+space') для Spotlight
-  ❌ CLICK('иконка поиска')
+## 🚀 ИЕРАРХИЯ ПРИОРИТЕТОВ:
 
-CLICK используй ТОЛЬКО когда нет командной альтернативы:
-- Клик по элементам ВНУТРИ приложения (кнопки Play, треки, результаты поиска)
-- Ввод в поля поиска
-- Элементы интерфейса без горячих клавиш
+### 1️⃣ TERMINAL (приоритет #1)
+Открытие приложений, системные команды:
+✅ TERMINAL('open -a "Chrome"')
+✅ HOTKEY('cmd+space')
+❌ CLICK('иконка приложения')
+
+### 2️⃣ ACCESSIBILITY_API (приоритет #2)
+НЕ РЕАЛИЗОВАНО - пропускаем
+
+### 3️⃣ MCP CHROME (приоритет #3) - ДЛЯ БРАУЗЕРА!
+**ИСПОЛЬЗУЙ для Chrome/веб-задач:**
+
+MCP_NAVIGATE(url='https://youtube.com')
+  → Открыть URL. ПРИОРИТЕТ выше CLICK!
+
+MCP_CLICK(selector='input[name="search"]')
+  → Клик по CSS селектору. ПРИОРИТЕТ выше VISUAL_CLICK!
+  
+MCP_EXECUTE_JS(code='document.querySelector("button").click()')
+  → JavaScript для сложных действий
+
+MCP_TYPE(text='hello', selector='input#search')
+  → Ввод текста если знаешь селектор
+
+**FALLBACK:** Если MCP failed → автоматически VISUAL_CLICK
+
+### 4️⃣ VISUAL_CLICK (приоритет #4) - LAST RESORT
+ТОЛЬКО когда:
+- Не знаешь CSS селектор
+- Не браузер (Spotify, другие приложения)
+- MCP не сработал
+
+**ПРИМЕРЫ:**
+Chrome задача:
+  ✅ MCP_NAVIGATE('youtube.com')    ← #3
+  ✅ MCP_CLICK('input#search')      ← #3
+  ❌ CLICK('адресная строка')       ← используй MCP!
+
+Spotify задача:
+  ✅ CLICK('кнопка Play')           ← MCP недоступен
+  ✅ TYPE('название трека')         ← обычный TYPE
 
 ## ВАЖНО О ПЛАНИРОВАНИИ
 - Планируй МАКСИМУМ 2-4 шага за раз
@@ -478,7 +512,12 @@ Gemini выбирает номер ячейки, мы кликаем в её ц�
         logger.info(f"▶️ Выполняю: {action} {params}")
         
         try:
-            if action == 'CLICK':
+            # MCP Actions (приоритет 3)
+            if action.startswith('MCP_'):
+                return await self._execute_mcp_action(action, params, monitor_info)
+            
+            # Traditional actions
+            elif action == 'CLICK':
                 return await self._execute_click(params, monitor_info)
             
             elif action == 'TYPE':
@@ -513,6 +552,66 @@ Gemini выбирает номер ячейки, мы кликаем в её ц�
                 'success': False,
                 'result': str(e),
                 'needs_replan': False
+            }
+
+    async def _execute_mcp_action(self, action: str, params: Dict, monitor_info: Dict) -> Dict:
+        """
+        Выполняет MCP действие с автоматическим fallback на VISUAL_CLICK
+        
+        Args:
+            action: MCP_NAVIGATE, MCP_CLICK, MCP_EXECUTE_JS, MCP_TYPE
+            params: Параметры действия
+            monitor_info: Информация о мониторе
+            
+        Returns:
+            Результат выполнения с флагом needs_replan
+        """
+        # Lazy init Chrome MCP
+        if not self.chrome_mcp:
+            self.chrome_mcp = await get_chrome_mcp_integration()
+        
+        # Выполняем MCP действие
+        result = await self.chrome_mcp.execute_action(action, params)
+        
+        if result['success']:
+            # MCP успешно выполнилось
+            logger.info(f"✅ {result['result']}")
+            return {
+                'success': True,
+                'result': result['result'],
+                'needs_replan': False
+            }
+        
+        elif result.get('needs_fallback'):
+            # MCP не удалось, пробуем fallback
+            logger.warning(f"⚠️ MCP failed: {result['result']}")
+            logger.info("💡 Пробую fallback на VISUAL_CLICK...")
+            
+            # Fallback: MCP_CLICK → CLICK
+            if action == 'MCP_CLICK':
+                # Извлекаем описание из селектора или используем общее
+                selector = params.get('selector', '')
+                element_desc = f"элемент с селектором {selector}" if selector else "элемент на странице"
+                
+                fallback_params = {'element_description': element_desc}
+                return await self._execute_click(fallback_params, monitor_info)
+            
+            # Для других MCP действий fallback нет - нужен replan
+            else:
+                self.action_tracker.add_failed(action, params, result['result'])
+                return {
+                    'success': False,
+                    'result': f"{result['result']} (fallback недоступен)",
+                    'needs_replan': True
+                }
+        
+        else:
+            # Критическая ошибка без fallback
+            self.action_tracker.add_failed(action, params, result['result'])
+            return {
+                'success': False,
+                'result': result['result'],
+                'needs_replan': True
             }
 
     async def _execute_click(self, params: Dict, monitor_info: Dict) -> Dict:

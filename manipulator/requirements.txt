@@ -8,3 +8,4 @@ pydub
 python-dotenv
 pyobjc-framework-ApplicationServices
 pyyaml
+mcp[cli]

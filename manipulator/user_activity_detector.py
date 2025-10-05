@@ -98,8 +98,12 @@ class UserActivityDetector:
     def _show_notification(self, title: str, message: str):
         """Показывает macOS уведомление"""
         try:
+            # Экранируем кавычки в сообщении
+            safe_message = message.replace('"', '\\"').replace("'", "\\'")
+            safe_title = title.replace('"', '\\"').replace("'", "\\'")
+            
             apple_script = f'''
-            display notification "{message}" with title "{title}" sound name "Glass"
+            display notification "{safe_message}" with title "{safe_title}" sound name "Glass"
             '''
             subprocess.run(['osascript', '-e', apple_script], 
                          capture_output=True, timeout=2)

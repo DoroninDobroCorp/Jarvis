@@ -62,6 +62,42 @@ actions:
       - reason: "Почему нужен replan (опционально)"
     example: "REPLAN('не вижу что отобразится в результатах поиска')"
     note: "Используй когда не можешь точно предсказать что будет дальше"
+  
+  # MCP Actions (приоритет выше CLICK!)
+  - name: MCP_NAVIGATE
+    description: "Открыть URL в Chrome через DevTools Protocol"
+    params:
+      - url: "URL для открытия"
+    example: "MCP_NAVIGATE('https://youtube.com')"
+    priority: 3
+    when_to_use: "Для открытия URL в Chrome. ПРИОРИТЕТ выше CLICK!"
+    
+  - name: MCP_CLICK
+    description: "Клик по элементу через CSS селектор"
+    params:
+      - selector: "CSS селектор элемента"
+    example: "MCP_CLICK('input[name=\"search\"]')"
+    priority: 3
+    when_to_use: "Если ЗНАЕШЬ CSS селектор элемента. ПРИОРИТЕТ выше VISUAL_CLICK!"
+    fallback: "CLICK если селектор неизвестен"
+    
+  - name: MCP_EXECUTE_JS
+    description: "Выполнить JavaScript код в Chrome"
+    params:
+      - code: "JavaScript код"
+    example: "MCP_EXECUTE_JS('document.querySelector(\"button\").click()')"
+    priority: 3
+    when_to_use: "Для сложных манипуляций DOM, получения данных"
+    
+  - name: MCP_TYPE
+    description: "Ввести текст в активный элемент через JavaScript"
+    params:
+      - text: "Текст для ввода"
+      - selector: "CSS селектор (опционально)"
+    example: "MCP_TYPE('hello world', 'input#search')"
+    priority: 3
+    when_to_use: "Для ввода текста в Chrome если знаешь селектор"
+    fallback: "TYPE + CLICK если селектор неизвестен"
 
 # Правила планирования (два уровня)
 planning_rules:
@@ -100,33 +136,67 @@ action_priority:
       method: "ACCESSIBILITY_API"
       when: "UI элементы доступны через macOS Accessibility API"
       status: "not_implemented"
+      note: "ПРИОРИТЕТ #2 - использовать когда будет реализовано!"
       examples:
         - "Чтение текста из элементов"
         - "Активация кнопок по имени/роли"
+        - "Навигация по меню приложений"
     
     3:
-      method: "MCP_SERVERS"
-      when: "Интеграция с внешними сервисами через API"
-      status: "not_configured"
-      available_servers: []
+      method: "MCP_CHROME"
+      when: "Работа с Chrome браузером через DevTools Protocol"
+      status: "implemented"
+      available_actions:
+        - "MCP_NAVIGATE: Открыть URL"
+        - "MCP_CLICK: Клик по CSS селектору"
+        - "MCP_EXECUTE_JS: Выполнить JavaScript"
+        - "MCP_TYPE: Ввести текст в активный элемент"
+        - "MCP_GET_CONTENT: Получить содержимое страницы"
+        - "MCP_SCREENSHOT: Сделать скриншот"
+      examples:
+        - "MCP_NAVIGATE('https://youtube.com')"
+        - "MCP_CLICK('input[name=\"search\"]')"
+        - "MCP_EXECUTE_JS('document.querySelector(\"button\").click()')"
+      fallback: "VISUAL_CLICK если MCP не работает"
     
     4:
       method: "VISUAL_CLICK"
-      when: "ТОЛЬКО если все предыдущие методы невозможны"
+      when: "ТОЛЬКО если все предыдущие методы невозможны или failed"
       implementation: "ruler_based_finder.py"
       description: "Итеративный поиск координат с визуальным подтверждением"
       examples:
         - "Клик по кнопке в UI приложения"
         - "Заполнение полей ввода"
+        - "Элементы без CSS селекторов"
 
   rules:
     - "ВСЕГДА проверяй возможность использования метода более высокого приоритета"
     - "VISUAL_CLICK - последний resort, используй только когда нет альтернативы"
     - "Для Terminal доступны: open, osascript, automator, горячие клавиши через cliclick"
 
-# MCP серверы (заготовка на будущее)
+# MCP серверы
 mcp_servers:
-  available: []
+  available:
+    - name: "chrome-devtools"
+      package: "chrome-devtools-mcp"
+      description: "Управление Chrome браузером через DevTools Protocol"
+      capabilities:
+        - "browser_navigate"      # Навигация по URL
+        - "browser_click"         # Клик по элементу (CSS селектор)
+        - "browser_execute"       # Выполнение JavaScript
+        - "browser_get_content"   # Получение содержимого страницы
+        - "browser_screenshot"    # Скриншот страницы
+        - "dom_inspection"        # Инспекция DOM элементов
+        - "network_monitoring"    # Мониторинг сетевых запросов
+        - "console_access"        # Доступ к консоли браузера
+        - "performance_metrics"   # Метрики производительности
+      when_to_use:
+        - "Автоматизация действий в Chrome (поиск, заполнение форм)"
+        - "Получение данных с веб-страниц"
+        - "Отладка веб-приложений"
+        - "Выполнение JavaScript на странице"
+      priority: 2  # Выше чем VISUAL_CLICK (4), ниже чем TERMINAL (1)
+  
   # Примеры для будущего:
   # - name: "github"
   #   capabilities: ["repos", "issues", "pull_requests"]

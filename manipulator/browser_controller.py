@@ -64,6 +64,12 @@ class BrowserController:
             is_single_monitor = True  # ЗАКОММЕНТИРОВАНО: len(self.screen_manager.displays) == 1
 
             # 3) Создаем окно и перемещаем на нужный монитор
+            # Делаем окно 70% ширины экрана справа, чтобы видеть терминал слева
+            window_width = int(display['width'] * 0.7)
+            window_height = display['height']
+            window_x = display['x'] + display['width'] - window_width  # Справа
+            window_y = display['y']
+            
             apple_script = f'''
             tell application "{self.browser_app_name}"
                 activate
@@ -75,8 +81,8 @@ class BrowserController:
             tell application "System Events"
                 tell application process "{self.browser_app_name}"
                     try
-                        set position of front window to {{{display['x']}, {display['y']}}}
-                        set size of front window to {{{display['width']}, {display['height']}}}
+                        set position of front window to {{{window_x}, {window_y}}}
+                        set size of front window to {{{window_width}, {window_height}}}
                     end try
                 end tell
             end tell

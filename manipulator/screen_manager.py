@@ -141,7 +141,8 @@ class ScreenManager:
         
         # Ждём бездействия пользователя (если включено и не force)
         if self.wait_for_user_idle and not force and self.activity_detector:
-            if not self.activity_detector.wait_for_idle(idle_seconds=2.0, show_notification=True):
+            logger.info(f"⏸️  Действие: клик на ({abs_x}, {abs_y})")
+            if not self.activity_detector.wait_for_idle(idle_seconds=2.2, show_notification=True):
                 logger.warning("⚠️ Не дождались бездействия, но продолжаю...")
         
         # Двигаем мышь и кликаем
@@ -163,8 +164,8 @@ class ScreenManager:
         
         # Ждём бездействия пользователя ПЕРЕД нажатием клавиш
         if self.wait_for_user_idle and not force and self.activity_detector:
-            logger.debug("Проверка активности перед вводом текста...")
-            if not self.activity_detector.wait_for_idle(idle_seconds=2.0, show_notification=True):
+            logger.info(f"⏸️  Действие: ввод текста '{text[:30]}...'")
+            if not self.activity_detector.wait_for_idle(idle_seconds=2.2, show_notification=True):
                 logger.warning("⚠️ Не дождались бездействия, но продолжаю...")
         
         time.sleep(0.5)
@@ -185,8 +186,8 @@ class ScreenManager:
         
         # Ждём бездействия пользователя ПЕРЕД нажатием клавиши
         if self.wait_for_user_idle and not force and self.activity_detector:
-            logger.debug("Проверка активности перед нажатием клавиши...")
-            if not self.activity_detector.wait_for_idle(idle_seconds=2.0, show_notification=True):
+            logger.info(f"⏸️  Действие: нажатие клавиши '{key}'")
+            if not self.activity_detector.wait_for_idle(idle_seconds=2.2, show_notification=True):
                 logger.warning("⚠️ Не дождались бездействия, но продолжаю...")
         
         pyautogui.press(key)
