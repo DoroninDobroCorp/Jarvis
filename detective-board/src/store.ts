@@ -529,20 +529,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   addLink: async (fromId, toId, color = '#C94545') => {
-    const s0 = get();
-    set((s) => ({ historyPast: [...s.historyPast, { nodes: s0.nodes, links: s0.links, viewport: s0.viewport, currentParentId: s0.currentParentId }], historyFuture: [] }));
-    if (fromId === toId) return '';
+    if (fromId === toId) {
+      log.warn('addLink:self-link-blocked', { fromId, toId });
+      return '';
+    }
     // prevent duplicate link with the same orientation only
     const exists = get().links.some((l) => (l.fromId === fromId && l.toId === toId));
     if (exists) {
       log.warn('addLink:duplicate-blocked', { fromId, toId });
       return '';
     }
+    // Сохраняем history только если связь реально создается
+    const s0 = get();
+    set((s) => ({ historyPast: [...s.historyPast, { nodes: s0.nodes, links: s0.links, viewport: s0.viewport, currentParentId: s0.currentParentId }], historyFuture: [] }));
     const id = crypto.randomUUID();
     const link: LinkThread = { id, fromId, toId, color, dir: 'one' };
     await db.links.add(link);
     set((s) => ({ links: [...s.links, link] }));
-    log.info('addLink', { id, fromId, toId, color });
+    log.info('addLink:success', { id, fromId, toId, color });
     return id;
   },
 

@@ -189,6 +189,18 @@ export const BoardCanvas: React.FC = () => {
   const [pendingLinkFrom, setPendingLinkFrom] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
   const [linkCtxMenu, setLinkCtxMenu] = useState<{ x: number; y: number; linkId: string } | null>(null);
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  
+  // Сброс pendingLinkFrom при выключении режима нитки
+  useEffect(() => {
+    if (tool !== 'link') {
+      log.info('link:mode-off, resetting pendingLinkFrom');
+      setPendingLinkFrom(null);
+    } else {
+      log.info('link:mode-on');
+    }
+  }, [tool, log]);
   // Локальный ввод даты дедлайна в контекстном меню, чтобы не дёргалось при onChange
   const [ctxDueLocal, setCtxDueLocal] = useState<string>('');
   useEffect(() => {
@@ -428,10 +440,31 @@ export const BoardCanvas: React.FC = () => {
   }, [viewport.x, viewport.y, viewport.scale]);
 
   const onMouseMove = useCallback((e: KonvaEventObject<MouseEvent>) => {
+    // Обновляем позицию курсора для временной линии связи
+    const stage = stageRef.current;
+    const pointer = stage?.getPointerPosition();
+    if (pointer) {
+      let lx: number, ly: number;
+      const grp = levelGroupRef.current;
+      if (grp) {
+        const t = grp.getAbsoluteTransform().copy();
+        t.invert();
+        const p = t.point(pointer);
+        lx = p.x; ly = p.y;
+      } else {
+        const sx = stageRef.current ? stageRef.current.x() : viewport.x;
+        const sy = stageRef.current ? stageRef.current.y() : viewport.y;
+        const sc = stageRef.current ? stageRef.current.scaleX() : viewport.scale;
+        const worldX = (pointer.x - sx) / sc;
+        const worldY = (pointer.y - sy) / sc;
+        lx = worldX - levelOrigin.x;
+        ly = worldY - levelOrigin.y;
+      }
+      setMousePos({ x: lx, y: ly });
+    }
+    
     // lasso
     if (lasso) {
-      const stage = stageRef.current;
-      const pointer = stage?.getPointerPosition();
       if (!pointer) return;
       let lx: number, ly: number;
       const grp = levelGroupRef.current;
@@ -460,7 +493,7 @@ export const BoardCanvas: React.FC = () => {
     const dy = e.evt.clientY - last.y;
     lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
     setViewport({ x: viewport.x + dx, y: viewport.y + dy, scale: viewport.scale });
-  }, [lasso, viewport, setViewport]);
+  }, [lasso, viewport, setViewport, levelOrigin.x, levelOrigin.y]);
 
   const onMouseUp = useCallback(() => {
     if (lasso) {
@@ -549,19 +582,32 @@ export const BoardCanvas: React.FC = () => {
         setSelection([id]);
       }
     } else if (tool === 'link') {
+      log.info('link:click', { nodeId: id, pendingFrom: pendingLinkFrom });
       if (!pendingLinkFrom) {
         // Первый клик - запоминаем узел-источник
+        log.info('link:first-click', { from: id });
         setPendingLinkFrom(id);
         setSelection([id]);
       } else if (pendingLinkFrom === id) {
         // Повторный клик на тот же узел - отменяем выбор
+        log.info('link:cancel', { nodeId: id });
         setPendingLinkFrom(null);
         setSelection([]);
       } else {
         // Второй клик на другой узел - создаём связь
-        void addLink(pendingLinkFrom, id).then(() => {
-          setPendingLinkFrom(null);
-          setSelection([]);
+        log.info('link:second-click', { from: pendingLinkFrom, to: id });
+        void addLink(pendingLinkFrom, id).then((linkId) => {
+          if (linkId) {
+            log.info('link:created', { linkId, from: pendingLinkFrom, to: id });
+            setPendingLinkFrom(null);
+            setSelection([]);
+            setLinkError(null);
+          } else {
+            log.warn('link:failed', { from: pendingLinkFrom, to: id, reason: 'duplicate or self-link' });
+            setLinkError('Нить уже существует или выбран тот же объект');
+            setTimeout(() => setLinkError(null), 3000);
+            // Не сбрасываем pendingLinkFrom - пользователь может попробовать другой узел
+          }
         });
       }
     } else if (tool === 'add-task' || tool === 'add-group' || tool === 'add-person-employee' || tool === 'add-person-partner' || tool === 'add-person-bot') {
@@ -1167,6 +1213,24 @@ export const BoardCanvas: React.FC = () => {
                 dash={[6, 4]}
               />
             ) : null}
+            {/* Temporary link line from first node to cursor */}
+            {pendingLinkFrom && mousePos && (() => {
+              const fromNode = visibleNodes.find(n => n.id === pendingLinkFrom);
+              if (!fromNode) return null;
+              const anchor = computeAnchorTowardsPoint(fromNode, mousePos);
+              return (
+                <Arrow
+                  points={[anchor.x, anchor.y, mousePos.x, mousePos.y]}
+                  stroke={'#FFD700'}
+                  strokeWidth={3}
+                  dash={[10, 5]}
+                  pointerLength={0}
+                  pointerWidth={0}
+                  perfectDrawEnabled={false}
+                  listening={false}
+                />
+              );
+            })()}
             {linksToRender.map(({ base: l, from, to }) => {
             const a = computeAnchorTowards(from, to);
             const b = computeAnchorTowards(to, from);
@@ -1791,6 +1855,12 @@ export const BoardCanvas: React.FC = () => {
       {hoverHUD ? (
         <div style={{ position: 'fixed', left: hoverHUD.x + 12, top: hoverHUD.y + 12, background: '#fff', color: '#111', padding: '2px 6px', borderRadius: 4, boxShadow: '0 2px 10px rgba(0,0,0,0.2)', fontSize: 13, pointerEvents: 'none', zIndex: 1002 }}>
           {hoverHUD.text}
+        </div>
+      ) : null}
+      {/* Link error notification */}
+      {linkError ? (
+        <div style={{ position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)', background: '#ff4444', color: '#fff', padding: '12px 20px', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.3)', fontSize: 14, fontWeight: 600, zIndex: 2000, pointerEvents: 'none' }}>
+          {linkError}
         </div>
       ) : null}
       {linkCtxMenu ? (
