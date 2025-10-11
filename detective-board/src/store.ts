@@ -3,6 +3,7 @@ import { db } from './db';
 import type { AnyNode, GroupNode, LinkThread, TaskNode, Tool, TaskStatus, PersonNode, PersonRole } from './types';
 import { getLogger } from './logger';
 import { computeNextDueDate, toIsoUTCFromYMD } from './recurrence';
+import { useGamificationStore } from './gamification';
 
 export interface AppState {
   nodes: AnyNode[];
@@ -18,6 +19,9 @@ export interface AppState {
   selection: string[]; // selected node ids
   editingNodeId: string | null;
   linkSelection: string[]; // selected link ids
+  
+  // КРИТИЧНО: Храним pendingLinkFrom в store чтобы избежать проблем с замыканиями!
+  pendingLinkFrom: string | null;
 
   // history
   historyPast: Array<{ nodes: AnyNode[]; links: LinkThread[]; viewport: { x: number; y: number; scale: number }; currentParentId: string | null }>;
@@ -63,6 +67,7 @@ export interface AppState {
   setLinkSelection: (ids: string[]) => void;
   setViewport: (vp: { x: number; y: number; scale: number }) => void;
   setPerfModeOverride: (mode: 'auto' | 'perf' | 'super') => void;
+  setPendingLinkFrom: (id: string | null) => void;
 
   // helpers
   visibleNodes: () => AnyNode[];
@@ -89,6 +94,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selection: [],
   editingNodeId: null,
   linkSelection: [],
+  pendingLinkFrom: null,
 
   historyPast: [],
   historyFuture: [],
@@ -338,6 +344,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       all.filter((n) => n.parentId === nid).forEach((child) => collect(child.id));
     };
     Array.from(ids).forEach((id) => collect(id));
+    
+    // Откатить XP для всех удаляемых задач
+    const revertTaskXp = useGamificationStore.getState().revertTaskXp;
+    toRemove.forEach((nodeId) => {
+      const node = all.find((n) => n.id === nodeId);
+      if (node && node.type === 'task' && node.status === 'done') {
+        revertTaskXp(nodeId);
+      }
+    });
+    
     if (toRemove.size > 0) {
       await db.nodes.bulkDelete(Array.from(toRemove));
       set((s) => ({
@@ -484,6 +500,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ historyPast: [...s.historyPast, { nodes: s0.nodes, links: s0.links, viewport: s0.viewport, currentParentId: s0.currentParentId }], historyFuture: [] }));
     const prev = get().nodes.find((n) => n.id === id);
     if (!prev) return;
+    
+    // Откатить XP если задача меняет статус с 'done' на другой
+    if (prev.type === 'task') {
+      const prevTask = prev as TaskNode;
+      const patchTask = patch as Partial<TaskNode>;
+      if (prevTask.status === 'done' && patchTask.status && patchTask.status !== 'done') {
+        const revertTaskXp = useGamificationStore.getState().revertTaskXp;
+        revertTaskXp(id);
+      }
+    }
+    
     const next = { ...prev, ...patch, updatedAt: now() } as AnyNode;
     await db.nodes.put(next);
     set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? next : n)) }));
@@ -517,6 +544,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       all.filter((n) => n.parentId === nid).forEach((child) => collect(child.id));
     };
     collect(id);
+    
+    // Откатить XP для всех удаляемых задач
+    const revertTaskXp = useGamificationStore.getState().revertTaskXp;
+    toRemove.forEach((nodeId) => {
+      const node = all.find((n) => n.id === nodeId);
+      if (node && node.type === 'task' && node.status === 'done') {
+        revertTaskXp(nodeId);
+      }
+    });
+    
     await db.nodes.bulkDelete(Array.from(toRemove));
     set((s) => ({ nodes: s.nodes.filter((n) => !toRemove.has(n.id)) }));
 
@@ -677,6 +714,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPerfModeOverride: (mode) => {
     log.info('setPerfModeOverride', { mode });
     set({ perfModeOverride: mode });
+  },
+  
+  setPendingLinkFrom: (id) => {
+    console.log('🏪 [STORE] setPendingLinkFrom called with:', id);
+    set({ pendingLinkFrom: id });
   },
 
   visibleNodes: () => {

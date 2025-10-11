@@ -78,6 +78,7 @@ export interface GamificationState {
   registerTaskCompletion: (info: TaskPathInfo, xp: number, difficulty: Difficulty, note?: string, completedAt?: number) => void;
   ignoreTaskCompletion: (taskId: string) => void;
   addXp: (entry: { amount: number; source: XpSource; note?: string; taskId?: string; achievementId?: string; ts?: number }) => void;
+  revertTaskXp: (taskId: string) => void;
   assignLevelTitle: (level: number, title: string) => void;
   clearLevelUpEvent: (level: number) => void;
   addAchievement: (input: { title: string; description: string; xpReward: number; imageUrl?: string }) => Achievement;
@@ -216,6 +217,48 @@ export const useGamificationStore = create<GamificationState>()(
             xpHistory: history,
             pendingLevelUps: pending,
             levelTitles: titles,
+          };
+        });
+      },
+      revertTaskXp: (taskId) => {
+        set((state) => {
+          // Найти completion для этой задачи
+          const completion = state.completions.find((c) => c.id === taskId);
+          if (!completion) {
+            // Задача не была обработана или уже удалена
+            const newProcessed = { ...state.processedTasks };
+            delete newProcessed[taskId];
+            return { processedTasks: newProcessed };
+          }
+
+          // Найти все XP записи для этой задачи
+          const relatedEntries = state.xpHistory.filter((e) => e.taskId === taskId);
+          const totalXpToRevert = relatedEntries.reduce((sum, e) => sum + e.amount, 0);
+
+          // Убрать записи из истории
+          const newHistory = state.xpHistory.filter((e) => e.taskId !== taskId);
+          
+          // Убрать completion
+          const newCompletions = state.completions.filter((c) => c.id !== taskId);
+          
+          // Убрать из processedTasks
+          const newProcessed = { ...state.processedTasks };
+          delete newProcessed[taskId];
+
+          // Вычесть XP
+          const nextXp = Math.max(0, state.xp - totalXpToRevert);
+          const nextLevel = levelForXp(nextXp);
+          
+          // Обновить pending level-ups (удалить уровни, которые больше не достигнуты)
+          const pending = state.pendingLevelUps.filter((evt) => evt.level <= nextLevel);
+
+          return {
+            xp: nextXp,
+            level: nextLevel,
+            xpHistory: newHistory,
+            completions: newCompletions,
+            processedTasks: newProcessed,
+            pendingLevelUps: pending,
           };
         });
       },
